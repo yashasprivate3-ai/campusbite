@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
-import initialBatches from './data/batches'
+import { calculateBatches } from './utils/batchCalculator'
+
 const menuItems = [
   { id: 1, name: 'Veg Fried Rice', description: 'Wok-tossed rice with fresh vegetables and house seasoning.', price: 70, category: 'Meals', emoji: '🍚', time: '8-10 min', popular: true },
   { id: 2, name: 'Masala Dosa', description: 'Crisp dosa served with potato masala, chutney and sambar.', price: 55, category: 'Meals', emoji: '🥞', time: '7-9 min' },
@@ -43,7 +44,12 @@ function loadKitchenBatches() {
     return []
   }
 }
-function KitchenDashboard({ orders, onStatusChange }) {
+function KitchenDashboard({ orders, batches, onAcceptBatch, onCompleteBatch }) {
+  
+  const calculatedBatches = useMemo(
+  () => calculateBatches(orders),
+  [orders]
+)
   const activeOrders = orders.filter(order => order.status !== "ready")
 
   return (
@@ -62,7 +68,35 @@ function KitchenDashboard({ orders, onStatusChange }) {
         </div>
       </section>
 
+<section className="prep-summary">
 
+  <h2>Production Batch Summary</h2>
+
+  <div className="prep-grid">
+
+    {calculatedBatches.map((batch) => (
+
+      <div className="prep-item" key={batch.itemName}>
+
+        <strong>
+          {batch.requiredQuantity}
+        </strong>
+
+        <span>
+          {batch.itemName}
+        </span>
+
+        <small>
+          {batch.linkedOrders.length} orders linked
+        </small>
+
+      </div>
+
+    ))}
+
+  </div>
+
+</section>
       <section className="kitchen-board">
 
         {["new", "preparing", "ready"].map(status => {
@@ -144,7 +178,7 @@ function KitchenDashboard({ orders, onStatusChange }) {
   )
 }
 function App() {
-  const [batches, setBatches] = useState(initialBatches)
+  const [batches, setBatches] = useState(loadKitchenBatches)
   const [activeCategory, setActiveCategory] = useState('All')
   const [cart, setCart] = useState({})
   const [isCartOpen, setIsCartOpen] = useState(false)

@@ -851,3 +851,34 @@ a:focus-visible {
   .checkout-content h1, .confirmation-content h1 { font-size: 38px; }
   .confirmation-content { padding-top: 8vh; }
 }
+/* Footer */
+
+.app-footer {
+  margin-top: 4rem;
+  padding: 3rem 1rem;
+  text-align: center;
+  border-top: 1px solid #e8e8e8;
+  background: #fff;
+}
+
+.footer-tagline {
+  margin: 0.2rem 0;
+  color: #6b7280;
+  font-size: 0.95rem;
+  letter-spacing: 0.4px;
+}
+
+.footer-signature {
+  margin: 1rem 0 0.4rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+.footer-version {
+  display: block;
+  margin-top: 0.4rem;
+  color: #9ca3af;
+  font-size: 0.85rem;
+  letter-spacing: 0.5px;
+}

@@ -238,8 +238,19 @@ function App() {
           </section>
         </div>
       )}
+      <footer className="app-footer">
+  <p className="footer-tagline">Made with passion.</p>
+  <p className="footer-tagline">Served with purpose.</p>
+
+  <h3 className="footer-signature">
+    👨‍🍳 Yash
+  </h3>
+
+  <small className="footer-version">
+    CampusBite • Version 1.0
+  </small>
+</footer>
     </div>
   )
 }
-
 export default App

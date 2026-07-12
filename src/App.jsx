@@ -44,8 +44,15 @@ function loadKitchenBatches() {
     return []
   }
 }
-function KitchenDashboard({ orders, batches, onAcceptBatch, onCompleteBatch }) {
-  
+function KitchenDashboard({ 
+  orders, 
+  batches, 
+  onAcceptBatch, 
+  onCompleteBatch,
+  onStartBatch,
+  onStatusChange
+})
+  {
   const calculatedBatches = useMemo(
   () => calculateBatches(orders),
   [orders]
@@ -89,7 +96,12 @@ function KitchenDashboard({ orders, batches, onAcceptBatch, onCompleteBatch }) {
         <small>
           {batch.linkedOrders.length} orders linked
         </small>
-
+<button
+  className="primary-action"
+  onClick={() => onStartBatch(batch)}
+>
+  Start Batch Preparation
+</button>
       </div>
 
     ))}
@@ -220,7 +232,20 @@ useEffect(() => {
       return nextCart
     })
   }
+function startBatch(batch) {
 
+  setKitchenOrders((orders) =>
+    orders.map((order) =>
+      batch.linkedOrders.includes(order.token)
+        ? {
+            ...order,
+            status: "preparing",
+          }
+        : order
+    )
+  )
+
+}
   function clearCart() {
     if (window.confirm('Remove every item from your cart?')) setCart({})
   }
@@ -471,6 +496,7 @@ function updateOrderStatus(token, status) {
   batches={batches}
   onAcceptBatch={acceptBatch}
   onCompleteBatch={completeBatch}
+  onStartBatch={startBatch}
   onStatusChange={updateOrderStatus}
 /> : <><main id="top">
         <section className="welcome-card">

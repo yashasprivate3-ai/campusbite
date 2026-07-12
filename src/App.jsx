@@ -18,16 +18,7 @@ function createOrderToken() {
   return `CB-${crypto.randomUUID().slice(0, 4).toUpperCase()}`
 }
 
-const kitchenStatuses = ['new', 'preparing', 'ready']
-
-const statusLabels = {
-  new: 'New',
-  preparing: 'Preparing',
-  ready: 'Ready'
-}
-
 const KITCHEN_ORDERS_KEY = 'campusbite-kitchen-orders'
-const KITCHEN_BATCHES_KEY = 'campusbite-kitchen-batches'
 
 function loadKitchenOrders() {
   try {
@@ -37,20 +28,11 @@ function loadKitchenOrders() {
   }
 }
 
-function loadKitchenBatches() {
-  try {
-    return JSON.parse(localStorage.getItem(KITCHEN_BATCHES_KEY)) || []
-  } catch {
-    return []
-  }
-}
-function KitchenDashboard({ 
-  orders, 
-  batches, 
-  onAcceptBatch, 
+function KitchenDashboard({
+  orders,
   onCompleteBatch,
   onStartBatch,
-  onStatusChange
+  onStatusChange,
 }) {
 
   const calculatedBatches = useMemo(
@@ -76,47 +58,55 @@ function KitchenDashboard({
       </section>
 
 <section className="prep-summary">
-
   <h2>Production Batch Summary</h2>
-
   <div className="prep-grid">
+    {calculatedBatches.map((batch) => {
+      const linkedOrders = batch.linkedOrders
+        .map((token) => orders.find((order) => order.token === token))
+        .filter(Boolean)
+      const isCompleted = linkedOrders.length > 0 && linkedOrders.every(
+        (order) => order.status === 'ready',
+      )
+      const isPreparing = linkedOrders.some(
+        (order) => order.status === 'preparing',
+      )
 
-    {calculatedBatches.map((batch) => (
+      return (
+        <div className="prep-item" key={batch.itemName}>
+          <strong>{batch.requiredQuantity}</strong>
+          <span>{batch.itemName}</span>
+          <small>{batch.linkedOrders.length} orders linked</small>
 
-      <div className="prep-item" key={batch.itemName}>
-
-        <strong>
-          {batch.requiredQuantity}
-        </strong>
-
-        <span>
-          {batch.itemName}
-        </span>
-
-        <small>
-          {batch.linkedOrders.length} orders linked
-        </small>
-{batch.status === "preparing" ? (
-  <button
-    className="secondary"
-    onClick={() => onCompleteBatch(batch)}
-  >
-    Complete Batch
-  </button>
-) : (
-  <button
-    className="primary-action"
-    onClick={() => onStartBatch(batch)}
-  >
-    Start Batch Preparation
-  </button>
-)}
-      </div>
-
-    ))}
-
+          {isCompleted ? (
+            <button className="secondary" type="button" disabled>
+              Completed
+            </button>
+          ) : isPreparing ? (
+            <div className="batch-progress-actions">
+              <button className="secondary" type="button" disabled>
+                Order In Progress
+              </button>
+              <button
+                className="primary-action"
+                type="button"
+                onClick={() => onCompleteBatch(batch)}
+              >
+                Complete Batch
+              </button>
+            </div>
+          ) : (
+            <button
+              className="primary-action"
+              type="button"
+              onClick={() => onStartBatch(batch)}
+            >
+              Start Batch Preparation
+            </button>
+          )}
+        </div>
+      )
+    })}
   </div>
-
 </section>
       <section className="kitchen-board">
 
@@ -199,8 +189,6 @@ function KitchenDashboard({
   )
 }
 function App() {
-  const [batches, setBatches] = useState(loadKitchenBatches)
-  const [batchStatuses, setBatchStatuses] = useState({})
   const [activeCategory, setActiveCategory] = useState('All')
   const [cart, setCart] = useState({})
   const [isCartOpen, setIsCartOpen] = useState(false)
@@ -218,12 +206,6 @@ function App() {
   )
 }, [kitchenOrders])
 
-useEffect(() => {
-  localStorage.setItem(
-    KITCHEN_BATCHES_KEY,
-    JSON.stringify(batches),
-  )
-}, [batches])
   const visibleItems = activeCategory === 'All' ? menuItems : menuItems.filter((item) => item.category === activeCategory)
   const cartItems = menuItems.filter((item) => cart[item.id])
   const cartCount = cartItems.reduce((total, item) => total + cart[item.id], 0)
@@ -242,25 +224,6 @@ useEffect(() => {
       return nextCart
     })
   }
-function startBatch(batch) {
-
-  setBatchStatuses((current) => ({
-    ...current,
-    [batch.itemName]: "preparing"
-  }))
-
-  setKitchenOrders((orders) =>
-    orders.map((order) =>
-      batch.linkedOrders.includes(order.token)
-        ? {
-            ...order,
-            status: "preparing",
-          }
-        : order
-    )
-  )
-
-}
   function clearCart() {
     if (window.confirm('Remove every item from your cart?')) setCart({})
   }
@@ -292,184 +255,6 @@ function startBatch(batch) {
     setCheckoutStep('confirmation')
   }
 
-  function acceptBatch(group) {
-  if (group.remaining <= 0) return
-
-  const allocations = []
-  const cookingBatches = batches.filter(
-    (batch) => batch.status === 'cooking',
-  )
-
-  kitchenOrders.forEach((order) => {
-    if (getPickupWindow(order) !== group.pickupWindow) return
-
-    const orderItem = order.items.find(
-      (item) => item.id === group.itemId,
-    )
-
-    if (!orderItem) return
-
-    const preparedQuantity = orderItem.preparedQuantity || 0
-
-    const alreadyAllocated = cookingBatches.reduce(
-      (total, batch) =>
-        total +
-        batch.allocations
-          .filter(
-            (allocation) =>
-              allocation.token === order.token &&
-              allocation.itemId === group.itemId,
-          )
-          .reduce(
-            (allocationTotal, allocation) =>
-              allocationTotal + allocation.quantity,
-            0,
-          ),
-      0,
-    )
-
-    const availableQuantity = Math.max(
-      0,
-      orderItem.quantity -
-        preparedQuantity -
-        alreadyAllocated,
-    )
-
-    if (availableQuantity > 0) {
-      allocations.push({
-        token: order.token,
-        itemId: group.itemId,
-        quantity: availableQuantity,
-      })
-    }
-  })
-
-  const batchQuantity = allocations.reduce(
-    (total, allocation) => total + allocation.quantity,
-    0,
-  )
-
-  if (batchQuantity === 0) return
-
-  const createdAt = new Date().toISOString()
-
-  const newBatch = {
-    id: createBatchId(group.itemName),
-    itemId: group.itemId,
-    itemName: group.itemName,
-    emoji: group.emoji,
-    pickupWindow: group.pickupWindow,
-    quantity: batchQuantity,
-    status: 'cooking',
-    createdAt,
-    allocations,
-  }
-
-  const linkedTokens = new Set(
-    allocations.map((allocation) => allocation.token),
-  )
-
-  setBatches((currentBatches) => [
-    ...currentBatches,
-    newBatch,
-  ])
-
-  setKitchenOrders((currentOrders) =>
-    currentOrders.map((order) =>
-      linkedTokens.has(order.token)
-        ? {
-            ...order,
-            status:
-              order.status === 'ready'
-                ? order.status
-                : 'preparing',
-            statusHistory: [
-              ...order.statusHistory,
-              {
-                status: 'preparing',
-                at: createdAt,
-                batchId: newBatch.id,
-              },
-            ],
-          }
-        : order,
-    ),
-  )
-}
-
-function completeBatch(batchId) {
-  const batch = batches.find(
-    (currentBatch) =>
-      currentBatch.id === batchId &&
-      currentBatch.status === 'cooking',
-  )
-
-  if (!batch) return
-
-  const completedAt = new Date().toISOString()
-
-  setKitchenOrders((currentOrders) =>
-    currentOrders.map((order) => {
-      const orderAllocations = batch.allocations.filter(
-        (allocation) => allocation.token === order.token,
-      )
-
-      if (orderAllocations.length === 0) return order
-
-      const updatedItems = order.items.map((item) => {
-        const allocation = orderAllocations.find(
-          (entry) => entry.itemId === item.id,
-        )
-
-        if (!allocation) return item
-
-        return {
-          ...item,
-          preparedQuantity: Math.min(
-            item.quantity,
-            (item.preparedQuantity || 0) +
-              allocation.quantity,
-          ),
-        }
-      })
-
-      const isFullyPrepared = updatedItems.every(
-        (item) =>
-          (item.preparedQuantity || 0) >= item.quantity,
-      )
-
-      const nextStatus = isFullyPrepared
-        ? 'ready'
-        : 'preparing'
-
-      return {
-        ...order,
-        items: updatedItems,
-        status: nextStatus,
-        statusHistory: [
-          ...order.statusHistory,
-          {
-            status: nextStatus,
-            at: completedAt,
-            batchId,
-          },
-        ],
-      }
-    }),
-  )
-
-  setBatches((currentBatches) =>
-    currentBatches.map((currentBatch) =>
-      currentBatch.id === batchId
-        ? {
-            ...currentBatch,
-            status: 'completed',
-            completedAt,
-          }
-        : currentBatch,
-    ),
-  )
-}
 function updateOrderStatus(token, status) {
   const at = new Date().toISOString()
 
@@ -489,37 +274,57 @@ function updateOrderStatus(token, status) {
   )
 }
 function startBatch(batch) {
+  const startedAt = new Date().toISOString()
 
-  setBatchStatuses((current) => ({
-    ...current,
-    [batch.itemName]: "preparing"
-  }))
+  setKitchenOrders((orders) => {
+    const linkedNewOrders = orders.filter(
+      (order) =>
+        batch.linkedOrders.includes(order.token) &&
+        order.status === 'new',
+    )
 
-  setKitchenOrders((orders) =>
-    orders.map((order) =>
-      batch.linkedOrders.includes(order.token)
+    if (linkedNewOrders.length === 0) return orders
+
+    return orders.map((order) =>
+      batch.linkedOrders.includes(order.token) && order.status === 'new'
         ? {
             ...order,
-            status: "preparing",
+            status: 'preparing',
+            statusHistory: [
+              ...(order.statusHistory || []),
+              { status: 'preparing', at: startedAt, batchItem: batch.itemName },
+            ],
           }
-        : order
+        : order,
     )
-  )
-
+  })
 }
-function completeBatch(batch) {
 
-  setKitchenOrders((orders) =>
-    orders.map((order) =>
-      batch.linkedOrders.includes(order.token)
+function completeBatch(batch) {
+  const completedAt = new Date().toISOString()
+
+  setKitchenOrders((orders) => {
+    const linkedPreparingOrders = orders.filter(
+      (order) =>
+        batch.linkedOrders.includes(order.token) &&
+        order.status === 'preparing',
+    )
+
+    if (linkedPreparingOrders.length === 0) return orders
+
+    return orders.map((order) =>
+      batch.linkedOrders.includes(order.token) && order.status === 'preparing'
         ? {
             ...order,
-            status: "ready",
+            status: 'ready',
+            statusHistory: [
+              ...(order.statusHistory || []),
+              { status: 'ready', at: completedAt, batchItem: batch.itemName },
+            ],
           }
-        : order
+        : order,
     )
-  )
-
+  })
 }
   function finishOrder() {
     setCheckoutStep(null)
@@ -542,21 +347,19 @@ function completeBatch(batch) {
       {activeView === 'kitchen' ? 
       <KitchenDashboard
   orders={kitchenOrders}
-  batches={batches}
   onStartBatch={startBatch}
-  onAcceptBatch={acceptBatch}
   onCompleteBatch={completeBatch}
   onStatusChange={updateOrderStatus}
 /> : <><main id="top">
         <section className="welcome-card">
           <div>
-            <p className="eyebrow">Canteen is open</p>
-            <h1>Good afternoon, Yashas.</h1>
-            <p className="welcome-copy">Choose your meal, pay online and collect it when it is ready.</p>
+            <p className="eyebrow">SMART CAMPUS DINING</p>
+            <h1>Order Smart just to Skip the long wait.</h1>
+            <p className="welcome-copy">Fresh meals prepared when you need them.</p>
           </div>
           <div className="service-status" aria-label="Current service status">
             <span className="status-dot"></span>
-            <span><strong>Normal service</strong><small>Estimated pickup: 8-10 min</small></span>
+            <span><strong>We will be live shortly....❤️</strong><small>Average pickup : 8–10 minutes</small></span>
           </div>
         </section>
 

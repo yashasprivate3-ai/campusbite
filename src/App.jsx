@@ -234,16 +234,26 @@ useEffect(() => {
   }
 function startBatch(batch) {
 
-  setKitchenOrders((orders) =>
-    orders.map((order) =>
-      batch.linkedOrders.includes(order.token)
-        ? {
-            ...order,
+  const updatedOrders = kitchenOrders.map((order) => {
+
+    if (batch.linkedOrders.includes(order.token)) {
+      return {
+        ...order,
+        status: "preparing",
+        statusHistory: [
+          ...order.statusHistory,
+          {
             status: "preparing",
+            at: new Date().toISOString()
           }
-        : order
-    )
-  )
+        ]
+      }
+    }
+
+    return order
+  })
+
+  setKitchenOrders(updatedOrders)
 
 }
   function clearCart() {

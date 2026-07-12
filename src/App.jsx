@@ -483,6 +483,20 @@ function updateOrderStatus(token, status) {
     )
   )
 }
+function startBatch(batch) {
+
+  setKitchenOrders((orders) =>
+    orders.map((order) =>
+      batch.linkedOrders.includes(order.token)
+        ? {
+            ...order,
+            status: "preparing",
+          }
+        : order
+    )
+  )
+
+}
   function finishOrder() {
     setCheckoutStep(null)
     setConfirmedOrder(null)

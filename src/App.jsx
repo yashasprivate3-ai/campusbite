@@ -18,15 +18,133 @@ function createOrderToken() {
 }
 
 const kitchenStatuses = ['new', 'preparing', 'ready']
-const statusLabels = { new: 'New', preparing: 'Preparing', ready: 'Ready' }
-function loadKitchenOrders() { try { return JSON.parse(localStorage.getItem('campusbite-kitchen-orders')) || [] } catch { return [] } }
 
-function KitchenDashboard({ orders, onStatusChange }) {
-  const summary = useMemo(() => { const result = new Map(); orders.filter(o => o.status !== 'ready').forEach(o => o.items.forEach(i => result.set(i.name, (result.get(i.name) || 0) + i.quantity))); return [...result.entries()].sort((a,b) => b[1]-a[1]) }, [orders])
-  return <main className="kitchen-main"><section className="kitchen-hero"><div><p className="eyebrow">Live operations</p><h1>Kitchen queue</h1><p>Prepare in order, then move each ticket as it progresses.</p></div><div className="kitchen-live"><span className="status-dot" />Live <strong>{orders.filter(o => o.status !== 'ready').length}</strong> active</div></section><section className="prep-summary"><div className="kitchen-section-heading"><div><p className="eyebrow">Across active tickets</p><h2>Preparation summary</h2></div><span>Ready orders excluded</span></div>{summary.length ? <div className="prep-grid">{summary.map(([name, quantity]) => <div className="prep-item" key={name}><strong>{quantity}</strong><span>{name}</span></div>)}</div> : <p className="kitchen-empty">Nothing to prepare right now.</p>}</section><section className="kitchen-board">{kitchenStatuses.map(status => { const list=orders.filter(o=>o.status===status); return <div className={'order-column '+status} key={status}><div className="column-heading"><h2>{statusLabels[status]}</h2><span>{list.length}</span></div><div className="ticket-list">{!list.length && <p className="column-empty">No {statusLabels[status].toLowerCase()} orders</p>}{list.map(order => <article className="order-ticket" key={order.token}><div className="ticket-top"><strong>{order.token}</strong><time>{new Date(order.createdAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div><ul>{order.items.map(i=><li key={i.id}><strong>{i.quantity}?</strong> {i.name}</li>)}</ul><div className="ticket-meta"><span>{order.pickupMethod==='scheduled'?order.pickupSlot:'ASAP pickup'}</span><span>{order.source}</span></div>{order.instructions&&<p className="ticket-note"><strong>Note:</strong> {order.instructions}</p>}<div className="ticket-actions">{status==='new'&&<button onClick={()=>onStatusChange(order.token,'preparing')}>Start preparing</button>}{status==='preparing'&&<><button className="secondary" onClick={()=>onStatusChange(order.token,'new')}>Move back</button><button onClick={()=>onStatusChange(order.token,'ready')}>Mark ready</button></>}{status==='ready'&&<button className="secondary" onClick={()=>onStatusChange(order.token,'preparing')}>Reopen order</button>}</div></article>)}</div></div>})}</section></main>
+const statusLabels = {
+  new: 'New',
+  preparing: 'Preparing',
+  ready: 'Ready'
 }
 
+const KITCHEN_ORDERS_KEY = 'campusbite-kitchen-orders'
+const KITCHEN_BATCHES_KEY = 'campusbite-kitchen-batches'
+
+function loadKitchenOrders() {
+  try {
+    return JSON.parse(localStorage.getItem(KITCHEN_ORDERS_KEY)) || []
+  } catch {
+    return []
+  }
+}
+
+function loadKitchenBatches() {
+  try {
+    return JSON.parse(localStorage.getItem(KITCHEN_BATCHES_KEY)) || []
+  } catch {
+    return []
+  }
+}
+function KitchenDashboard({ orders, onStatusChange }) {
+  const activeOrders = orders.filter(order => order.status !== "ready")
+
+  return (
+    <main className="kitchen-main">
+
+      <section className="kitchen-hero">
+        <div>
+          <p className="eyebrow">Live operations</p>
+          <h1>Kitchen Queue</h1>
+          <p>Prepare orders and update progress.</p>
+        </div>
+
+        <div className="kitchen-live">
+          🟢 Live 
+          <strong>{activeOrders.length}</strong> active
+        </div>
+      </section>
+
+
+      <section className="kitchen-board">
+
+        {["new", "preparing", "ready"].map(status => {
+
+          const statusOrders = orders.filter(
+            order => order.status === status
+          )
+
+          return (
+            <div className="order-column" key={status}>
+
+              <h2>
+                {status.toUpperCase()} ({statusOrders.length})
+              </h2>
+
+
+              {statusOrders.map(order => (
+
+                <article className="order-ticket" key={order.token}>
+
+                  <h3>{order.token}</h3>
+
+
+                  {order.items.map(item => (
+                    <p key={item.id}>
+                      {item.quantity} × {item.name}
+                    </p>
+                  ))}
+
+
+                  <small>
+                    {order.pickupMethod === "scheduled"
+                      ? order.pickupSlot
+                      : "ASAP pickup"}
+                  </small>
+
+
+                  {order.instructions && (
+                    <p>
+                      Note: {order.instructions}
+                    </p>
+                  )}
+
+
+                  {status === "new" && (
+                    <button
+                      onClick={() =>
+                        onStatusChange(order.token,"preparing")
+                      }
+                    >
+                      Start preparing
+                    </button>
+                  )}
+
+
+                  {status === "preparing" && (
+                    <button
+                      onClick={() =>
+                        onStatusChange(order.token,"ready")
+                      }
+                    >
+                      Mark ready
+                    </button>
+                  )}
+
+
+                </article>
+
+              ))}
+
+            </div>
+          )
+
+        })}
+
+      </section>
+
+    </main>
+  )
+}
 function App() {
+  const [batches, setBatches] = useState(loadKitchenBatches)
   const [activeCategory, setActiveCategory] = useState('All')
   const [cart, setCart] = useState({})
   const [isCartOpen, setIsCartOpen] = useState(false)
@@ -37,7 +155,19 @@ function App() {
   const [confirmedOrder, setConfirmedOrder] = useState(null)
   const [activeView, setActiveView] = useState('student')
   const [kitchenOrders, setKitchenOrders] = useState(loadKitchenOrders)
-  useEffect(() => localStorage.setItem('campusbite-kitchen-orders', JSON.stringify(kitchenOrders)), [kitchenOrders])
+  useEffect(() => {
+  localStorage.setItem(
+    KITCHEN_ORDERS_KEY,
+    JSON.stringify(kitchenOrders),
+  )
+}, [kitchenOrders])
+
+useEffect(() => {
+  localStorage.setItem(
+    KITCHEN_BATCHES_KEY,
+    JSON.stringify(batches),
+  )
+}, [batches])
   const visibleItems = activeCategory === 'All' ? menuItems : menuItems.filter((item) => item.category === activeCategory)
   const cartItems = menuItems.filter((item) => cart[item.id])
   const cartCount = cartItems.reduce((total, item) => total + cart[item.id], 0)
@@ -71,7 +201,11 @@ function App() {
     const createdAt = new Date().toISOString()
     const confirmed = {
       token,
-      items: cartItems.map((item) => ({ ...item, quantity: cart[item.id] })),
+      items: cartItems.map((item) => ({
+  ...item,
+  quantity: cart[item.id],
+  preparedQuantity: 0,
+})),
       total: cartTotal,
       pickupMethod,
       pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
@@ -84,11 +218,202 @@ function App() {
     setCheckoutStep('confirmation')
   }
 
-  function updateOrderStatus(token, status) {
-    const at = new Date().toISOString()
-    setKitchenOrders(orders => orders.map(order => order.token === token ? { ...order, status, statusHistory: [...order.statusHistory, { status, at }] } : order))
+  function acceptBatch(group) {
+  if (group.remaining <= 0) return
+
+  const allocations = []
+  const cookingBatches = batches.filter(
+    (batch) => batch.status === 'cooking',
+  )
+
+  kitchenOrders.forEach((order) => {
+    if (getPickupWindow(order) !== group.pickupWindow) return
+
+    const orderItem = order.items.find(
+      (item) => item.id === group.itemId,
+    )
+
+    if (!orderItem) return
+
+    const preparedQuantity = orderItem.preparedQuantity || 0
+
+    const alreadyAllocated = cookingBatches.reduce(
+      (total, batch) =>
+        total +
+        batch.allocations
+          .filter(
+            (allocation) =>
+              allocation.token === order.token &&
+              allocation.itemId === group.itemId,
+          )
+          .reduce(
+            (allocationTotal, allocation) =>
+              allocationTotal + allocation.quantity,
+            0,
+          ),
+      0,
+    )
+
+    const availableQuantity = Math.max(
+      0,
+      orderItem.quantity -
+        preparedQuantity -
+        alreadyAllocated,
+    )
+
+    if (availableQuantity > 0) {
+      allocations.push({
+        token: order.token,
+        itemId: group.itemId,
+        quantity: availableQuantity,
+      })
+    }
+  })
+
+  const batchQuantity = allocations.reduce(
+    (total, allocation) => total + allocation.quantity,
+    0,
+  )
+
+  if (batchQuantity === 0) return
+
+  const createdAt = new Date().toISOString()
+
+  const newBatch = {
+    id: createBatchId(group.itemName),
+    itemId: group.itemId,
+    itemName: group.itemName,
+    emoji: group.emoji,
+    pickupWindow: group.pickupWindow,
+    quantity: batchQuantity,
+    status: 'cooking',
+    createdAt,
+    allocations,
   }
 
+  const linkedTokens = new Set(
+    allocations.map((allocation) => allocation.token),
+  )
+
+  setBatches((currentBatches) => [
+    ...currentBatches,
+    newBatch,
+  ])
+
+  setKitchenOrders((currentOrders) =>
+    currentOrders.map((order) =>
+      linkedTokens.has(order.token)
+        ? {
+            ...order,
+            status:
+              order.status === 'ready'
+                ? order.status
+                : 'preparing',
+            statusHistory: [
+              ...order.statusHistory,
+              {
+                status: 'preparing',
+                at: createdAt,
+                batchId: newBatch.id,
+              },
+            ],
+          }
+        : order,
+    ),
+  )
+}
+
+function completeBatch(batchId) {
+  const batch = batches.find(
+    (currentBatch) =>
+      currentBatch.id === batchId &&
+      currentBatch.status === 'cooking',
+  )
+
+  if (!batch) return
+
+  const completedAt = new Date().toISOString()
+
+  setKitchenOrders((currentOrders) =>
+    currentOrders.map((order) => {
+      const orderAllocations = batch.allocations.filter(
+        (allocation) => allocation.token === order.token,
+      )
+
+      if (orderAllocations.length === 0) return order
+
+      const updatedItems = order.items.map((item) => {
+        const allocation = orderAllocations.find(
+          (entry) => entry.itemId === item.id,
+        )
+
+        if (!allocation) return item
+
+        return {
+          ...item,
+          preparedQuantity: Math.min(
+            item.quantity,
+            (item.preparedQuantity || 0) +
+              allocation.quantity,
+          ),
+        }
+      })
+
+      const isFullyPrepared = updatedItems.every(
+        (item) =>
+          (item.preparedQuantity || 0) >= item.quantity,
+      )
+
+      const nextStatus = isFullyPrepared
+        ? 'ready'
+        : 'preparing'
+
+      return {
+        ...order,
+        items: updatedItems,
+        status: nextStatus,
+        statusHistory: [
+          ...order.statusHistory,
+          {
+            status: nextStatus,
+            at: completedAt,
+            batchId,
+          },
+        ],
+      }
+    }),
+  )
+
+  setBatches((currentBatches) =>
+    currentBatches.map((currentBatch) =>
+      currentBatch.id === batchId
+        ? {
+            ...currentBatch,
+            status: 'completed',
+            completedAt,
+          }
+        : currentBatch,
+    ),
+  )
+}
+function updateOrderStatus(token, status) {
+  const at = new Date().toISOString()
+
+  setKitchenOrders((orders) =>
+    orders.map((order) =>
+      order.token === token
+        ? {
+            ...order,
+            status,
+            statusHistory: [
+              ...(order.statusHistory || []),
+              { status, at }
+            ]
+          }
+        : order
+    )
+  )
+}
   function finishOrder() {
     setCheckoutStep(null)
     setConfirmedOrder(null)
@@ -107,7 +432,13 @@ function App() {
         <div className="header-actions"><div className="view-switch" aria-label="Choose app view"><button className={activeView === 'student' ? 'active' : ''} onClick={() => setActiveView('student')}>Student</button><button className={activeView === 'kitchen' ? 'active' : ''} onClick={() => { setActiveView('kitchen'); setIsCartOpen(false) }}>Kitchen</button></div>{activeView === 'student' && <button className="header-cart" onClick={() => setIsCartOpen(true)} aria-label={`Open cart with ${cartCount} items`}><span>My cart</span><span className="cart-count">{cartCount}</span></button>}</div>
       </header>
 
-      {activeView === 'kitchen' ? <KitchenDashboard orders={kitchenOrders} onStatusChange={updateOrderStatus} /> : <><main id="top">
+      {activeView === 'kitchen' ? <KitchenDashboard
+  orders={kitchenOrders}
+  batches={batches}
+  onAcceptBatch={acceptBatch}
+  onCompleteBatch={completeBatch}
+  onStatusChange={updateOrderStatus}
+/> : <><main id="top">
         <section className="welcome-card">
           <div>
             <p className="eyebrow">Canteen is open</p>

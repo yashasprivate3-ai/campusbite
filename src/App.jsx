@@ -51,8 +51,8 @@ function KitchenDashboard({
   onCompleteBatch,
   onStartBatch,
   onStatusChange
-})
-  {
+}) {
+
   const calculatedBatches = useMemo(
   () => calculateBatches(orders),
   [orders]
@@ -96,12 +96,21 @@ function KitchenDashboard({
         <small>
           {batch.linkedOrders.length} orders linked
         </small>
-<button
-  className="primary-action"
-  onClick={() => onStartBatch(batch)}
->
-  Start Batch Preparation
-</button>
+{batch.status === "preparing" ? (
+  <button
+    className="secondary"
+    onClick={() => onCompleteBatch(batch)}
+  >
+    Complete Batch
+  </button>
+) : (
+  <button
+    className="primary-action"
+    onClick={() => onStartBatch(batch)}
+  >
+    Start Batch Preparation
+  </button>
+)}
       </div>
 
     ))}
@@ -234,26 +243,16 @@ useEffect(() => {
   }
 function startBatch(batch) {
 
-  const updatedOrders = kitchenOrders.map((order) => {
-
-    if (batch.linkedOrders.includes(order.token)) {
-      return {
-        ...order,
-        status: "preparing",
-        statusHistory: [
-          ...order.statusHistory,
-          {
+  setKitchenOrders((orders) =>
+    orders.map((order) =>
+      batch.linkedOrders.includes(order.token)
+        ? {
+            ...order,
             status: "preparing",
-            at: new Date().toISOString()
           }
-        ]
-      }
-    }
-
-    return order
-  })
-
-  setKitchenOrders(updatedOrders)
+        : order
+    )
+  )
 
 }
   function clearCart() {
@@ -497,6 +496,20 @@ function startBatch(batch) {
   )
 
 }
+function completeBatch(batch) {
+
+  setKitchenOrders((orders) =>
+    orders.map((order) =>
+      batch.linkedOrders.includes(order.token)
+        ? {
+            ...order,
+            status: "ready",
+          }
+        : order
+    )
+  )
+
+}
   function finishOrder() {
     setCheckoutStep(null)
     setConfirmedOrder(null)
@@ -515,12 +528,14 @@ function startBatch(batch) {
         <div className="header-actions"><div className="view-switch" aria-label="Choose app view"><button className={activeView === 'student' ? 'active' : ''} onClick={() => setActiveView('student')}>Student</button><button className={activeView === 'kitchen' ? 'active' : ''} onClick={() => { setActiveView('kitchen'); setIsCartOpen(false) }}>Kitchen</button></div>{activeView === 'student' && <button className="header-cart" onClick={() => setIsCartOpen(true)} aria-label={`Open cart with ${cartCount} items`}><span>My cart</span><span className="cart-count">{cartCount}</span></button>}</div>
       </header>
 
-      {activeView === 'kitchen' ? <KitchenDashboard
+      {activeView === 'kitchen' ? 
+      <KitchenDashboard
   orders={kitchenOrders}
   batches={batches}
+  onStartBatch={startBatch}
   onAcceptBatch={acceptBatch}
   onCompleteBatch={completeBatch}
-  onStartBatch={startBatch}
+  onCompleteBatch={completeBatch}
   onStatusChange={updateOrderStatus}
 /> : <><main id="top">
         <section className="welcome-card">

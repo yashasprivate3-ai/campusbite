@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
-
+import initialBatches from './data/batches'
 const menuItems = [
   { id: 1, name: 'Veg Fried Rice', description: 'Wok-tossed rice with fresh vegetables and house seasoning.', price: 70, category: 'Meals', emoji: '🍚', time: '8-10 min', popular: true },
   { id: 2, name: 'Masala Dosa', description: 'Crisp dosa served with potato masala, chutney and sambar.', price: 55, category: 'Meals', emoji: '🥞', time: '7-9 min' },
@@ -144,7 +144,7 @@ function KitchenDashboard({ orders, onStatusChange }) {
   )
 }
 function App() {
-  const [batches, setBatches] = useState(loadKitchenBatches)
+  const [batches, setBatches] = useState(initialBatches)
   const [activeCategory, setActiveCategory] = useState('All')
   const [cart, setCart] = useState({})
   const [isCartOpen, setIsCartOpen] = useState(false)

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 
 const menuItems = [
@@ -17,6 +17,15 @@ function createOrderToken() {
   return `CB-${crypto.randomUUID().slice(0, 4).toUpperCase()}`
 }
 
+const kitchenStatuses = ['new', 'preparing', 'ready']
+const statusLabels = { new: 'New', preparing: 'Preparing', ready: 'Ready' }
+function loadKitchenOrders() { try { return JSON.parse(localStorage.getItem('campusbite-kitchen-orders')) || [] } catch { return [] } }
+
+function KitchenDashboard({ orders, onStatusChange }) {
+  const summary = useMemo(() => { const result = new Map(); orders.filter(o => o.status !== 'ready').forEach(o => o.items.forEach(i => result.set(i.name, (result.get(i.name) || 0) + i.quantity))); return [...result.entries()].sort((a,b) => b[1]-a[1]) }, [orders])
+  return <main className="kitchen-main"><section className="kitchen-hero"><div><p className="eyebrow">Live operations</p><h1>Kitchen queue</h1><p>Prepare in order, then move each ticket as it progresses.</p></div><div className="kitchen-live"><span className="status-dot" />Live <strong>{orders.filter(o => o.status !== 'ready').length}</strong> active</div></section><section className="prep-summary"><div className="kitchen-section-heading"><div><p className="eyebrow">Across active tickets</p><h2>Preparation summary</h2></div><span>Ready orders excluded</span></div>{summary.length ? <div className="prep-grid">{summary.map(([name, quantity]) => <div className="prep-item" key={name}><strong>{quantity}</strong><span>{name}</span></div>)}</div> : <p className="kitchen-empty">Nothing to prepare right now.</p>}</section><section className="kitchen-board">{kitchenStatuses.map(status => { const list=orders.filter(o=>o.status===status); return <div className={'order-column '+status} key={status}><div className="column-heading"><h2>{statusLabels[status]}</h2><span>{list.length}</span></div><div className="ticket-list">{!list.length && <p className="column-empty">No {statusLabels[status].toLowerCase()} orders</p>}{list.map(order => <article className="order-ticket" key={order.token}><div className="ticket-top"><strong>{order.token}</strong><time>{new Date(order.createdAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div><ul>{order.items.map(i=><li key={i.id}><strong>{i.quantity}?</strong> {i.name}</li>)}</ul><div className="ticket-meta"><span>{order.pickupMethod==='scheduled'?order.pickupSlot:'ASAP pickup'}</span><span>{order.source}</span></div>{order.instructions&&<p className="ticket-note"><strong>Note:</strong> {order.instructions}</p>}<div className="ticket-actions">{status==='new'&&<button onClick={()=>onStatusChange(order.token,'preparing')}>Start preparing</button>}{status==='preparing'&&<><button className="secondary" onClick={()=>onStatusChange(order.token,'new')}>Move back</button><button onClick={()=>onStatusChange(order.token,'ready')}>Mark ready</button></>}{status==='ready'&&<button className="secondary" onClick={()=>onStatusChange(order.token,'preparing')}>Reopen order</button>}</div></article>)}</div></div>})}</section></main>
+}
+
 function App() {
   const [activeCategory, setActiveCategory] = useState('All')
   const [cart, setCart] = useState({})
@@ -26,7 +35,9 @@ function App() {
   const [pickupSlot, setPickupSlot] = useState(pickupSlots[0])
   const [instructions, setInstructions] = useState('')
   const [confirmedOrder, setConfirmedOrder] = useState(null)
-
+  const [activeView, setActiveView] = useState('student')
+  const [kitchenOrders, setKitchenOrders] = useState(loadKitchenOrders)
+  useEffect(() => localStorage.setItem('campusbite-kitchen-orders', JSON.stringify(kitchenOrders)), [kitchenOrders])
   const visibleItems = activeCategory === 'All' ? menuItems : menuItems.filter((item) => item.category === activeCategory)
   const cartItems = menuItems.filter((item) => cart[item.id])
   const cartCount = cartItems.reduce((total, item) => total + cart[item.id], 0)
@@ -57,15 +68,25 @@ function App() {
 
   function confirmOrder() {
     const token = createOrderToken()
-    setConfirmedOrder({
+    const createdAt = new Date().toISOString()
+    const confirmed = {
       token,
       items: cartItems.map((item) => ({ ...item, quantity: cart[item.id] })),
       total: cartTotal,
       pickupMethod,
       pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
-    })
+      instructions: instructions.trim(), source: 'Student app', createdAt, status: 'new',
+      statusHistory: [{ status: 'new', at: createdAt }],
+    }
+    setConfirmedOrder(confirmed)
+    setKitchenOrders((orders) => [...orders, confirmed])
     setCart({})
     setCheckoutStep('confirmation')
+  }
+
+  function updateOrderStatus(token, status) {
+    const at = new Date().toISOString()
+    setKitchenOrders(orders => orders.map(order => order.token === token ? { ...order, status, statusHistory: [...order.statusHistory, { status, at }] } : order))
   }
 
   function finishOrder() {
@@ -83,12 +104,10 @@ function App() {
           <span className="brand-mark">CB</span>
           <span><strong>CampusBite</strong><small>Working name</small></span>
         </a>
-        <button className="header-cart" type="button" onClick={() => setIsCartOpen(true)} aria-label={`Open cart with ${cartCount} items`}>
-          <span>My cart</span><span className="cart-count">{cartCount}</span>
-        </button>
+        <div className="header-actions"><div className="view-switch" aria-label="Choose app view"><button className={activeView === 'student' ? 'active' : ''} onClick={() => setActiveView('student')}>Student</button><button className={activeView === 'kitchen' ? 'active' : ''} onClick={() => { setActiveView('kitchen'); setIsCartOpen(false) }}>Kitchen</button></div>{activeView === 'student' && <button className="header-cart" onClick={() => setIsCartOpen(true)} aria-label={`Open cart with ${cartCount} items`}><span>My cart</span><span className="cart-count">{cartCount}</span></button>}</div>
       </header>
 
-      <main id="top">
+      {activeView === 'kitchen' ? <KitchenDashboard orders={kitchenOrders} onStatusChange={updateOrderStatus} /> : <><main id="top">
         <section className="welcome-card">
           <div>
             <p className="eyebrow">Canteen is open</p>
@@ -250,6 +269,7 @@ function App() {
     CampusBite • Version 1.0
   </small>
 </footer>
+      </>}
     </div>
   )
 }

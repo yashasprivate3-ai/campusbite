@@ -200,6 +200,7 @@ function KitchenDashboard({
 }
 function App() {
   const [batches, setBatches] = useState(loadKitchenBatches)
+  const [batchStatuses, setBatchStatuses] = useState({})
   const [activeCategory, setActiveCategory] = useState('All')
   const [cart, setCart] = useState({})
   const [isCartOpen, setIsCartOpen] = useState(false)
@@ -242,6 +243,11 @@ useEffect(() => {
     })
   }
 function startBatch(batch) {
+
+  setBatchStatuses((current) => ({
+    ...current,
+    [batch.itemName]: "preparing"
+  }))
 
   setKitchenOrders((orders) =>
     orders.map((order) =>
@@ -484,6 +490,11 @@ function updateOrderStatus(token, status) {
 }
 function startBatch(batch) {
 
+  setBatchStatuses((current) => ({
+    ...current,
+    [batch.itemName]: "preparing"
+  }))
+
   setKitchenOrders((orders) =>
     orders.map((order) =>
       batch.linkedOrders.includes(order.token)
@@ -534,7 +545,6 @@ function completeBatch(batch) {
   batches={batches}
   onStartBatch={startBatch}
   onAcceptBatch={acceptBatch}
-  onCompleteBatch={completeBatch}
   onCompleteBatch={completeBatch}
   onStatusChange={updateOrderStatus}
 /> : <><main id="top">

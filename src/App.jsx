@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
-import BatchHistory from './components/BatchHistory'
+import { BatchHistory } from './components/BatchHistory'
 import BatchTimer from './components/BatchTimer'
-import KitchenActivityFeed from './components/KitchenActivityFeed'
-import {
-  KitchenStatistics,
-  LiveKitchenDashboard,
-} from './components/KitchenMetrics'
+import { CollapsiblePanel } from './components/CollapsiblePanel'
+import { KitchenActivityFeed } from './components/KitchenActivityFeed'
+import { LiveKitchenDashboard } from './components/KitchenMetrics'
+import { KitchenStatistics } from './components/KitchenStatistics'
 import {
   buildKitchenActivity,
   completeBatchOrders,
@@ -81,6 +80,9 @@ function KitchenDashboard({
     [orders, batchRecords],
   )
   const activeOrders = orders.filter((order) => order.status !== 'ready')
+  const completedBatchCount = batchRecords.filter(
+    (batch) => batch.status === 'completed',
+  ).length
 
   return (
     <main className="kitchen-main">
@@ -89,17 +91,17 @@ function KitchenDashboard({
         <div>
           <p className="eyebrow">Sprint 4 · Live operations</p>
           <h1>Kitchen Queue</h1>
-          <p>Prepare orders, monitor batches, and keep pickup moving.</p>
+          <p>Prepare orders and update progress.</p>
         </div>
 
         <div className="kitchen-live">
           <span className="live-dot" aria-hidden="true" /> Live
-          <strong>{activeOrders.length}</strong> active
+          <span aria-hidden="true">•</span>
+          <strong>{activeOrders.length}</strong> active orders
         </div>
       </section>
 
       <LiveKitchenDashboard metrics={metrics} />
-      <KitchenStatistics metrics={metrics} />
 
 <section className="prep-summary">
   <h2>Production Batch Summary</h2>
@@ -251,9 +253,30 @@ function KitchenDashboard({
 
       </section>
 
-      <div className="kitchen-intelligence-grid">
-        <BatchHistory batches={batchRecords} />
-        <KitchenActivityFeed activities={activities} />
+      <div className="kitchen-collapsible-stack">
+        <CollapsiblePanel
+          id="kitchen-statistics"
+          title="Kitchen Statistics"
+          summary="Live operational summary"
+        >
+          <KitchenStatistics metrics={metrics} />
+        </CollapsiblePanel>
+
+        <CollapsiblePanel
+          id="kitchen-activity"
+          title="Activity Feed"
+          summary={`${activities.length} recent events`}
+        >
+          <KitchenActivityFeed activities={activities} />
+        </CollapsiblePanel>
+
+        <CollapsiblePanel
+          id="batch-history"
+          title="Batch History"
+          summary={`${completedBatchCount} completed`}
+        >
+          <BatchHistory batches={batchRecords} />
+        </CollapsiblePanel>
       </div>
 
     </main>

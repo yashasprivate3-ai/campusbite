@@ -8,14 +8,9 @@ function formatActivityTime(timestamp) {
   })
 }
 
-export default function KitchenActivityFeed({ activities }) {
+export function KitchenActivityFeed({ activities }) {
   return (
-    <section className="intelligence-panel" aria-labelledby="activity-feed-title">
-      <div className="kitchen-section-heading">
-        <h2 id="activity-feed-title">Kitchen Activity</h2>
-        <span>Latest first</span>
-      </div>
-
+    <div className="activity-feed-content">
       {activities.length === 0 ? (
         <p className="intelligence-empty">Kitchen activity will appear here.</p>
       ) : (
@@ -34,6 +29,6 @@ export default function KitchenActivityFeed({ activities }) {
           ))}
         </ol>
       )}
-    </section>
+    </div>
   )
 }

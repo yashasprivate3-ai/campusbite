@@ -9,18 +9,13 @@ function formatDateTime(timestamp) {
   })
 }
 
-export default function BatchHistory({ batches }) {
+export function BatchHistory({ batches }) {
   const completedBatches = batches
     .filter((batch) => batch.status === 'completed' && batch.completedAt)
     .sort((left, right) => new Date(right.completedAt) - new Date(left.completedAt))
 
   return (
-    <section className="intelligence-panel" aria-labelledby="batch-history-title">
-      <div className="kitchen-section-heading">
-        <h2 id="batch-history-title">Batch History</h2>
-        <span>{completedBatches.length} completed</span>
-      </div>
-
+    <div className="batch-history-content">
       {completedBatches.length === 0 ? (
         <p className="intelligence-empty">
           Completed production batches will appear here.
@@ -50,6 +45,6 @@ export default function BatchHistory({ batches }) {
           ))}
         </div>
       )}
-    </section>
+    </div>
   )
 }

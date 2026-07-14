@@ -6,6 +6,7 @@ import { CollapsiblePanel } from './components/CollapsiblePanel'
 import { KitchenActivityFeed } from './components/KitchenActivityFeed'
 import { LiveKitchenDashboard } from './components/KitchenMetrics'
 import { KitchenStatistics } from './components/KitchenStatistics'
+import { OrderTracking } from './components/OrderTracking'
 import {
   buildKitchenActivity,
   completeBatchOrders,
@@ -38,6 +39,7 @@ function createOrderToken() {
 
 const KITCHEN_ORDERS_KEY = 'campusbite-kitchen-orders'
 const KITCHEN_BATCHES_KEY = 'campusbite-kitchen-batches'
+const TRACKED_ORDER_KEY = 'campusbite-tracked-order-token'
 
 function loadKitchenOrders() {
   try {
@@ -53,6 +55,10 @@ function loadKitchenBatches() {
   } catch {
     return []
   }
+}
+
+function loadTrackedOrderToken() {
+  return localStorage.getItem(TRACKED_ORDER_KEY)
 }
 
 const KITCHEN_QUEUE_STATUSES = ['new', 'preparing', 'ready']
@@ -307,10 +313,16 @@ function App() {
   const [activeView, setActiveView] = useState('student')
   const [kitchenOrders, setKitchenOrders] = useState(loadKitchenOrders)
   const [kitchenBatches, setKitchenBatches] = useState(loadKitchenBatches)
+  const [trackedOrderToken, setTrackedOrderToken] = useState(
+    loadTrackedOrderToken,
+  )
+  const [studentView, setStudentView] = useState(() =>
+    loadTrackedOrderToken() ? 'tracking' : 'menu',
+  )
 
   useEffect(() => {
     window.scrollTo(0, 0)
-  }, [activeView])
+  }, [activeView, studentView])
 
   useEffect(() => {
     localStorage.setItem(KITCHEN_ORDERS_KEY, JSON.stringify(kitchenOrders))
@@ -320,10 +332,21 @@ function App() {
     localStorage.setItem(KITCHEN_BATCHES_KEY, JSON.stringify(kitchenBatches))
   }, [kitchenBatches])
 
+  useEffect(() => {
+    if (trackedOrderToken) {
+      localStorage.setItem(TRACKED_ORDER_KEY, trackedOrderToken)
+    }
+  }, [trackedOrderToken])
+
   const visibleItems = activeCategory === 'All' ? menuItems : menuItems.filter((item) => item.category === activeCategory)
   const cartItems = menuItems.filter((item) => cart[item.id])
   const cartCount = cartItems.reduce((total, item) => total + cart[item.id], 0)
   const cartTotal = cartItems.reduce((total, item) => total + item.price * cart[item.id], 0)
+  const trackedOrder = useMemo(
+    () =>
+      kitchenOrders.find((order) => order.token === trackedOrderToken) || null,
+    [kitchenOrders, trackedOrderToken],
+  )
 
   function addItem(itemId) {
     setCart((currentCart) => ({ ...currentCart, [itemId]: (currentCart[itemId] || 0) + 1 }))
@@ -364,6 +387,7 @@ function App() {
       statusHistory: [{ status: 'new', at: createdAt }],
     }
     setConfirmedOrder(confirmed)
+    setTrackedOrderToken(token)
     setKitchenOrders((orders) => [...orders, confirmed])
     setCart({})
     setCheckoutStep('confirmation')
@@ -417,6 +441,16 @@ function completeBatch(batch) {
   function finishOrder() {
     setCheckoutStep(null)
     setConfirmedOrder(null)
+    setStudentView('menu')
+    setPickupMethod('asap')
+    setPickupSlot(pickupSlots[0])
+    setInstructions('')
+  }
+
+  function openOrderTracking() {
+    setCheckoutStep(null)
+    setConfirmedOrder(null)
+    setStudentView('tracking')
     setPickupMethod('asap')
     setPickupSlot(pickupSlots[0])
     setInstructions('')
@@ -429,7 +463,51 @@ function completeBatch(batch) {
           <span className="brand-mark">CB</span>
           <span><strong>CampusBite</strong><small>Working name</small></span>
         </a>
-        <div className="header-actions"><div className="view-switch" aria-label="Choose app view"><button className={activeView === 'student' ? 'active' : ''} onClick={() => setActiveView('student')}>Student</button><button className={activeView === 'kitchen' ? 'active' : ''} onClick={() => { setActiveView('kitchen'); setIsCartOpen(false) }}>Kitchen</button></div>{activeView === 'student' && <button className="header-cart" onClick={() => setIsCartOpen(true)} aria-label={`Open cart with ${cartCount} items`}><span>My cart</span><span className="cart-count">{cartCount}</span></button>}</div>
+        <div className="header-actions">
+          <div className="view-switch" aria-label="Choose app view">
+            <button
+              className={activeView === 'student' ? 'active' : ''}
+              onClick={() => setActiveView('student')}
+            >
+              Student
+            </button>
+            <button
+              className={activeView === 'kitchen' ? 'active' : ''}
+              onClick={() => {
+                setActiveView('kitchen')
+                setIsCartOpen(false)
+              }}
+            >
+              Kitchen
+            </button>
+          </div>
+
+          {activeView === 'student' && trackedOrder && (
+            <button
+              className={`header-track${studentView === 'tracking' ? ' active' : ''}`}
+              type="button"
+              onClick={() => {
+                setStudentView('tracking')
+                setIsCartOpen(false)
+              }}
+              aria-label={`Track order ${trackedOrder.token}`}
+            >
+              <span aria-hidden="true">◎</span>
+              <span>Track order</span>
+            </button>
+          )}
+
+          {activeView === 'student' && (
+            <button
+              className="header-cart"
+              onClick={() => setIsCartOpen(true)}
+              aria-label={`Open cart with ${cartCount} items`}
+            >
+              <span>My cart</span>
+              <span className="cart-count">{cartCount}</span>
+            </button>
+          )}
+        </div>
       </header>
 
       {activeView === 'kitchen' ? 
@@ -439,7 +517,14 @@ function completeBatch(batch) {
   onStartBatch={startBatch}
   onCompleteBatch={completeBatch}
   onStatusChange={updateOrderStatus}
-/> : <><main id="top">
+/> : <>
+      {studentView === 'tracking' && trackedOrder ? (
+        <OrderTracking
+          order={trackedOrder}
+          onBackToMenu={() => setStudentView('menu')}
+        />
+      ) : (
+      <main id="top">
         <section className="welcome-card">
           <div>
             <p className="eyebrow">SMART CAMPUS DINING</p>
@@ -485,8 +570,9 @@ function completeBatch(batch) {
           </div>
         </section>
       </main>
+      )}
 
-      {cartCount > 0 && (
+      {studentView !== 'tracking' && cartCount > 0 && (
         <button className="cart-bar" type="button" onClick={() => setIsCartOpen(true)}>
           <span><strong>{cartCount} {cartCount === 1 ? 'item' : 'items'}</strong><small>₹{cartTotal}</small></span><span>View cart →</span>
         </button>
@@ -583,7 +669,10 @@ function completeBatch(batch) {
                 <div className="success-mark">✓</div><p className="eyebrow">Order confirmed</p><h1>Your token is {confirmedOrder.token}</h1>
                 <p>{confirmedOrder.pickupMethod === 'scheduled' ? `Pickup expected between ${confirmedOrder.pickupSlot}.` : 'We will show your order as ready after preparation.'}</p>
                 <div className="token-card"><span>Show this token at pickup</span><strong>{confirmedOrder.token}</strong><small>{confirmedOrder.items.reduce((total, item) => total + item.quantity, 0)} items · ₹{confirmedOrder.total}</small></div>
-                <button className="primary-action" type="button" onClick={finishOrder}>Back to menu</button>
+                <div className="confirmation-actions">
+                  <button className="primary-action" type="button" onClick={openOrderTracking}>Track My Order</button>
+                  <button className="confirmation-secondary" type="button" onClick={finishOrder}>Back to menu</button>
+                </div>
               </div>
             )}
           </section>

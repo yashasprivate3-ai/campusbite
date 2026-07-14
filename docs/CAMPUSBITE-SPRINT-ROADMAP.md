@@ -15,7 +15,7 @@ This roadmap takes CampusBite from its current browser-based prototype through a
 | 3.3 | Production batch summary | Completed |
 | 3.4 | Kitchen batch workflow | Completed |
 | 3.5 | Kitchen UI polish | Completed |
-| 4 | Kitchen intelligence | Planned |
+| 4 | Kitchen intelligence | Completed |
 | 5 | Student order tracking | Planned |
 | 6 | Backend and persistent data | Planned |
 | 7 | Authentication and roles | Planned |
@@ -239,7 +239,7 @@ Sprint 3 is divided into five incremental kitchen milestones so order lifecycle,
 
 **Risks:** Misleading timers after device sleep, priority starvation, and excessive interface noise.
 
-**Completion status:** Planned.
+**Completion status:** Completed.
 
 **Recommended Git milestone:** `Sprint 4: add kitchen timing counters and batch intelligence`
 

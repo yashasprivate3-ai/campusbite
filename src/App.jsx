@@ -1,6 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { calculateBatches } from './utils/batchCalculator'
+import BatchHistory from './components/BatchHistory'
+import BatchTimer from './components/BatchTimer'
+import KitchenActivityFeed from './components/KitchenActivityFeed'
+import {
+  KitchenStatistics,
+  LiveKitchenDashboard,
+} from './components/KitchenMetrics'
+import {
+  buildKitchenActivity,
+  completeBatchOrders,
+  completeBatchRecord,
+  createBatchSnapshot,
+  findActiveBatchRecord,
+  getBatchPriorities,
+  getBatchStartedAt,
+  getKitchenMetrics,
+  getProductionSummaryBatches,
+  startBatchOrders,
+  startBatchRecord,
+} from './utils/kitchenIntelligence'
 
 const menuItems = [
   { id: 1, name: 'Veg Fried Rice', description: 'Wok-tossed rice with fresh vegetables and house seasoning.', price: 70, category: 'Meals', emoji: '🍚', time: '8-10 min', popular: true },
@@ -19,6 +38,7 @@ function createOrderToken() {
 }
 
 const KITCHEN_ORDERS_KEY = 'campusbite-kitchen-orders'
+const KITCHEN_BATCHES_KEY = 'campusbite-kitchen-batches'
 
 function loadKitchenOrders() {
   try {
@@ -28,39 +48,63 @@ function loadKitchenOrders() {
   }
 }
 
+function loadKitchenBatches() {
+  try {
+    return JSON.parse(localStorage.getItem(KITCHEN_BATCHES_KEY)) || []
+  } catch {
+    return []
+  }
+}
+
 function KitchenDashboard({
+  batchRecords,
   orders,
   onCompleteBatch,
   onStartBatch,
   onStatusChange,
 }) {
 
-  const calculatedBatches = useMemo(
-  () => calculateBatches(orders),
-  [orders]
-)
-  const activeOrders = orders.filter(order => order.status !== "ready")
+  const { activeBatches, displayedBatches } = useMemo(
+    () => getProductionSummaryBatches(orders, batchRecords),
+    [orders, batchRecords],
+  )
+  const metrics = useMemo(
+    () => getKitchenMetrics(orders, batchRecords),
+    [orders, batchRecords],
+  )
+  const priorities = useMemo(
+    () => getBatchPriorities(activeBatches, orders),
+    [activeBatches, orders],
+  )
+  const activities = useMemo(
+    () => buildKitchenActivity(orders, batchRecords),
+    [orders, batchRecords],
+  )
+  const activeOrders = orders.filter((order) => order.status !== 'ready')
 
   return (
     <main className="kitchen-main">
 
       <section className="kitchen-hero">
         <div>
-          <p className="eyebrow">Live operations</p>
+          <p className="eyebrow">Sprint 4 · Live operations</p>
           <h1>Kitchen Queue</h1>
-          <p>Prepare orders and update progress.</p>
+          <p>Prepare orders, monitor batches, and keep pickup moving.</p>
         </div>
 
         <div className="kitchen-live">
-          🟢 Live 
+          <span className="live-dot" aria-hidden="true" /> Live
           <strong>{activeOrders.length}</strong> active
         </div>
       </section>
 
+      <LiveKitchenDashboard metrics={metrics} />
+      <KitchenStatistics metrics={metrics} />
+
 <section className="prep-summary">
   <h2>Production Batch Summary</h2>
   <div className="prep-grid">
-    {calculatedBatches.map((batch) => {
+    {displayedBatches.map((batch) => {
       const linkedOrders = batch.linkedOrders
         .map((token) => orders.find((order) => order.token === token))
         .filter(Boolean)
@@ -70,12 +114,34 @@ function KitchenDashboard({
       const isPreparing = linkedOrders.some(
         (order) => order.status === 'preparing',
       )
+      const activeRecord = findActiveBatchRecord(batch, batchRecords)
+      const startedAt = getBatchStartedAt(batch, linkedOrders, batchRecords)
+      const priority = priorities[batch.itemName]
+      const isPriority =
+        !isCompleted && (priority?.highVolume || priority?.longestWait)
 
       return (
-        <div className="prep-item" key={batch.itemName}>
+        <article
+          className={`prep-item${isPriority ? ' priority-batch' : ''}`}
+          key={batch.summaryKey}
+        >
           <strong>{batch.requiredQuantity}</strong>
           <span>{batch.itemName}</span>
           <small>{batch.linkedOrders.length} orders linked</small>
+
+          {isPriority && (
+            <div className="priority-indicators" aria-label="Batch priority">
+              {priority.highVolume && <span>Highest volume</span>}
+              {priority.longestWait && <span>Longest wait</span>}
+            </div>
+          )}
+
+          {isPreparing && startedAt && (
+            <BatchTimer
+              key={activeRecord?.id || startedAt}
+              startedAt={startedAt}
+            />
+          )}
 
           {isCompleted ? (
             <button className="secondary" type="button" disabled>
@@ -103,7 +169,7 @@ function KitchenDashboard({
               Start Batch Preparation
             </button>
           )}
-        </div>
+        </article>
       )
     })}
   </div>
@@ -185,6 +251,11 @@ function KitchenDashboard({
 
       </section>
 
+      <div className="kitchen-intelligence-grid">
+        <BatchHistory batches={batchRecords} />
+        <KitchenActivityFeed activities={activities} />
+      </div>
+
     </main>
   )
 }
@@ -199,12 +270,19 @@ function App() {
   const [confirmedOrder, setConfirmedOrder] = useState(null)
   const [activeView, setActiveView] = useState('student')
   const [kitchenOrders, setKitchenOrders] = useState(loadKitchenOrders)
+  const [kitchenBatches, setKitchenBatches] = useState(loadKitchenBatches)
+
   useEffect(() => {
-  localStorage.setItem(
-    KITCHEN_ORDERS_KEY,
-    JSON.stringify(kitchenOrders),
-  )
-}, [kitchenOrders])
+    window.scrollTo(0, 0)
+  }, [activeView])
+
+  useEffect(() => {
+    localStorage.setItem(KITCHEN_ORDERS_KEY, JSON.stringify(kitchenOrders))
+  }, [kitchenOrders])
+
+  useEffect(() => {
+    localStorage.setItem(KITCHEN_BATCHES_KEY, JSON.stringify(kitchenBatches))
+  }, [kitchenBatches])
 
   const visibleItems = activeCategory === 'All' ? menuItems : menuItems.filter((item) => item.category === activeCategory)
   const cartItems = menuItems.filter((item) => cart[item.id])
@@ -275,56 +353,30 @@ function updateOrderStatus(token, status) {
 }
 function startBatch(batch) {
   const startedAt = new Date().toISOString()
+  const batchSnapshot = createBatchSnapshot(batch, kitchenOrders, 'new')
 
-  setKitchenOrders((orders) => {
-    const linkedNewOrders = orders.filter(
-      (order) =>
-        batch.linkedOrders.includes(order.token) &&
-        order.status === 'new',
-    )
+  if (batchSnapshot.linkedOrders.length === 0) return
 
-    if (linkedNewOrders.length === 0) return orders
-
-    return orders.map((order) =>
-      batch.linkedOrders.includes(order.token) && order.status === 'new'
-        ? {
-            ...order,
-            status: 'preparing',
-            statusHistory: [
-              ...(order.statusHistory || []),
-              { status: 'preparing', at: startedAt, batchItem: batch.itemName },
-            ],
-          }
-        : order,
-    )
-  })
+  setKitchenOrders((orders) =>
+    startBatchOrders(orders, batchSnapshot, startedAt),
+  )
+  setKitchenBatches((records) =>
+    startBatchRecord(records, batchSnapshot, startedAt),
+  )
 }
 
 function completeBatch(batch) {
   const completedAt = new Date().toISOString()
+  const batchSnapshot = createBatchSnapshot(batch, kitchenOrders, 'preparing')
 
-  setKitchenOrders((orders) => {
-    const linkedPreparingOrders = orders.filter(
-      (order) =>
-        batch.linkedOrders.includes(order.token) &&
-        order.status === 'preparing',
-    )
+  if (batchSnapshot.linkedOrders.length === 0) return
 
-    if (linkedPreparingOrders.length === 0) return orders
-
-    return orders.map((order) =>
-      batch.linkedOrders.includes(order.token) && order.status === 'preparing'
-        ? {
-            ...order,
-            status: 'ready',
-            statusHistory: [
-              ...(order.statusHistory || []),
-              { status: 'ready', at: completedAt, batchItem: batch.itemName },
-            ],
-          }
-        : order,
-    )
-  })
+  setKitchenOrders((orders) =>
+    completeBatchOrders(orders, batchSnapshot, completedAt),
+  )
+  setKitchenBatches((records) =>
+    completeBatchRecord(records, batchSnapshot, completedAt),
+  )
 }
   function finishOrder() {
     setCheckoutStep(null)
@@ -346,6 +398,7 @@ function completeBatch(batch) {
 
       {activeView === 'kitchen' ? 
       <KitchenDashboard
+  batchRecords={kitchenBatches}
   orders={kitchenOrders}
   onStartBatch={startBatch}
   onCompleteBatch={completeBatch}

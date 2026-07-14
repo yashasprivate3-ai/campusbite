@@ -1789,3 +1789,155 @@ body {
     transition: none;
   }
 }
+
+/* Sprint 4.1.1 — Kitchen Operations Dashboard Polish */
+
+.kitchen-board {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.order-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 560px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.queue-column-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid rgba(23, 63, 53, 0.08);
+  background: inherit;
+}
+
+.queue-column-header h2 {
+  min-width: 0;
+  margin: 0;
+  color: #30483f;
+  font-size: 23px;
+}
+
+.queue-column-header span {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: #426255;
+  background: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.queue-scroll-region {
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 12px 16px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+}
+
+.queue-scroll-region:focus-visible {
+  outline: 3px solid rgba(47, 117, 94, 0.3);
+  outline-offset: -4px;
+}
+
+.queue-scroll-region::-webkit-scrollbar {
+  width: 9px;
+}
+
+.queue-scroll-region::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(66, 98, 85, 0.34);
+  background-clip: padding-box;
+}
+
+.queue-scroll-region::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.queue-scroll-region .ticket-list,
+.queue-scroll-region .order-ticket {
+  min-width: 0;
+}
+
+.queue-scroll-region .column-empty {
+  margin-top: 0;
+}
+
+.batch-status {
+  grid-column: 1 / -1;
+  justify-self: start;
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: #426255;
+  background: #e6eee9;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.batch-status.preparing {
+  color: #6f521e;
+  background: #ffe5ab;
+}
+
+.prep-empty-state {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 24px 18px;
+  border-radius: 15px;
+  color: #6d746f;
+  background: #f2f6f3;
+  text-align: center;
+}
+
+@media (max-width: 860px) {
+  .kitchen-board {
+    grid-template-columns: 1fr;
+  }
+
+  .order-column {
+    height: 500px;
+  }
+}
+
+@media (max-width: 620px) {
+  .order-column {
+    height: 460px;
+  }
+
+  .queue-column-header {
+    padding: 17px 16px 14px;
+  }
+
+  .queue-column-header h2 {
+    font-size: 21px;
+  }
+
+  .queue-scroll-region {
+    padding: 12px 10px 14px 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queue-scroll-region {
+    scroll-behavior: auto;
+  }
+}

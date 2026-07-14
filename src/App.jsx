@@ -55,6 +55,8 @@ function loadKitchenBatches() {
   }
 }
 
+const KITCHEN_QUEUE_STATUSES = ['new', 'preparing', 'ready']
+
 function KitchenDashboard({
   batchRecords,
   orders,
@@ -63,7 +65,7 @@ function KitchenDashboard({
   onStatusChange,
 }) {
 
-  const { activeBatches, displayedBatches } = useMemo(
+  const { activeBatches } = useMemo(
     () => getProductionSummaryBatches(orders, batchRecords),
     [orders, batchRecords],
   )
@@ -83,6 +85,16 @@ function KitchenDashboard({
   const completedBatchCount = batchRecords.filter(
     (batch) => batch.status === 'completed',
   ).length
+  const ordersByStatus = useMemo(
+    () =>
+      Object.fromEntries(
+        KITCHEN_QUEUE_STATUSES.map((status) => [
+          status,
+          orders.filter((order) => order.status === status),
+        ]),
+      ),
+    [orders],
+  )
 
   return (
     <main className="kitchen-main">
@@ -106,13 +118,10 @@ function KitchenDashboard({
 <section className="prep-summary">
   <h2>Production Batch Summary</h2>
   <div className="prep-grid">
-    {displayedBatches.map((batch) => {
+    {activeBatches.map((batch) => {
       const linkedOrders = batch.linkedOrders
         .map((token) => orders.find((order) => order.token === token))
         .filter(Boolean)
-      const isCompleted = linkedOrders.length > 0 && linkedOrders.every(
-        (order) => order.status === 'ready',
-      )
       const isPreparing = linkedOrders.some(
         (order) => order.status === 'preparing',
       )
@@ -120,7 +129,7 @@ function KitchenDashboard({
       const startedAt = getBatchStartedAt(batch, linkedOrders, batchRecords)
       const priority = priorities[batch.itemName]
       const isPriority =
-        !isCompleted && (priority?.highVolume || priority?.longestWait)
+        priority?.highVolume || priority?.longestWait
 
       return (
         <article
@@ -130,6 +139,12 @@ function KitchenDashboard({
           <strong>{batch.requiredQuantity}</strong>
           <span>{batch.itemName}</span>
           <small>{batch.linkedOrders.length} orders linked</small>
+
+          <div
+            className={`batch-status ${isPreparing ? 'preparing' : 'ready-to-start'}`}
+          >
+            {isPreparing ? 'Preparing' : 'Ready to Start'}
+          </div>
 
           {isPriority && (
             <div className="priority-indicators" aria-label="Batch priority">
@@ -145,11 +160,7 @@ function KitchenDashboard({
             />
           )}
 
-          {isCompleted ? (
-            <button className="secondary" type="button" disabled>
-              Completed
-            </button>
-          ) : isPreparing ? (
+          {isPreparing ? (
             <div className="batch-progress-actions">
               <button className="secondary" type="button" disabled>
                 Order In Progress
@@ -174,83 +185,85 @@ function KitchenDashboard({
         </article>
       )
     })}
+
+    {activeBatches.length === 0 && (
+      <p className="prep-empty-state">No active production batches.</p>
+    )}
   </div>
 </section>
-      <section className="kitchen-board">
-
-        {["new", "preparing", "ready"].map(status => {
-
-          const statusOrders = orders.filter(
-            order => order.status === status
-          )
+      <section className="kitchen-board" aria-label="Kitchen order queues">
+        {KITCHEN_QUEUE_STATUSES.map((status) => {
+          const statusOrders = ordersByStatus[status]
+          const queueTitleId = `queue-${status}-title`
 
           return (
-            <div className="order-column" key={status}>
+            <section
+              className="order-column"
+              key={status}
+              aria-labelledby={queueTitleId}
+            >
+              <header className="queue-column-header">
+                <h2 id={queueTitleId}>{status.toUpperCase()}</h2>
+                <span>
+                  {statusOrders.length}{' '}
+                  {statusOrders.length === 1 ? 'Order' : 'Orders'}
+                </span>
+              </header>
 
-              <h2>
-                {status.toUpperCase()} ({statusOrders.length})
-              </h2>
+              <div
+                className="queue-scroll-region"
+                tabIndex={statusOrders.length > 0 ? 0 : undefined}
+                aria-label={`${status.toUpperCase()} orders`}
+              >
+                <div className="ticket-list">
+                  {statusOrders.map((order) => (
+                    <article className="order-ticket" key={order.token}>
+                      <h3>{order.token}</h3>
 
+                      {order.items.map((item) => (
+                        <p key={item.id}>
+                          {item.quantity} × {item.name}
+                        </p>
+                      ))}
 
-              {statusOrders.map(order => (
+                      <small>
+                        {order.pickupMethod === 'scheduled'
+                          ? order.pickupSlot
+                          : 'ASAP pickup'}
+                      </small>
 
-                <article className="order-ticket" key={order.token}>
+                      {order.instructions && (
+                        <p>Note: {order.instructions}</p>
+                      )}
 
-                  <h3>{order.token}</h3>
+                      {status === 'new' && (
+                        <button
+                          onClick={() =>
+                            onStatusChange(order.token, 'preparing')
+                          }
+                        >
+                          Start preparing
+                        </button>
+                      )}
 
-
-                  {order.items.map(item => (
-                    <p key={item.id}>
-                      {item.quantity} × {item.name}
-                    </p>
+                      {status === 'preparing' && (
+                        <button
+                          onClick={() => onStatusChange(order.token, 'ready')}
+                        >
+                          Mark ready
+                        </button>
+                      )}
+                    </article>
                   ))}
 
-
-                  <small>
-                    {order.pickupMethod === "scheduled"
-                      ? order.pickupSlot
-                      : "ASAP pickup"}
-                  </small>
-
-
-                  {order.instructions && (
-                    <p>
-                      Note: {order.instructions}
-                    </p>
+                  {statusOrders.length === 0 && (
+                    <p className="column-empty">No {status} orders.</p>
                   )}
-
-
-                  {status === "new" && (
-                    <button
-                      onClick={() =>
-                        onStatusChange(order.token,"preparing")
-                      }
-                    >
-                      Start preparing
-                    </button>
-                  )}
-
-
-                  {status === "preparing" && (
-                    <button
-                      onClick={() =>
-                        onStatusChange(order.token,"ready")
-                      }
-                    >
-                      Mark ready
-                    </button>
-                  )}
-
-
-                </article>
-
-              ))}
-
-            </div>
+                </div>
+              </div>
+            </section>
           )
-
         })}
-
       </section>
 
       <div className="kitchen-collapsible-stack">

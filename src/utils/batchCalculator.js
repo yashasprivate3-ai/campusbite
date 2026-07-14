@@ -1,4 +1,4 @@
-﻿export function calculateBatches(orders) {
+export function calculateBatches(orders) {
   const batchMap = {}
 
   orders.forEach((order) => {

@@ -679,6 +679,66 @@ main {
   font-weight: 800;
 }
 
+.primary-action:disabled,
+.order-ticket button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.api-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 20px 0;
+  padding: 16px 18px;
+  border: 1px solid #dfe2dc;
+  border-radius: 16px;
+  color: #46544d;
+  background: #fff;
+}
+
+.api-state div {
+  display: grid;
+  gap: 4px;
+}
+
+.api-state span {
+  font-size: 14px;
+}
+
+.api-state-error {
+  border-color: #e7b8a8;
+  color: #7a3526;
+  background: #fff5f1;
+}
+
+.api-state button {
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: #173f35;
+  font-weight: 800;
+}
+
+.checkout-api-error {
+  display: grid;
+  gap: 4px;
+  margin: 16px 0;
+  padding: 14px 16px;
+  border: 1px solid #e7b8a8;
+  border-radius: 12px;
+  color: #7a3526;
+  background: #fff5f1;
+}
+
+.checkout-api-error span {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .review-card,
 .pickup-summary,
 .token-card {
@@ -2339,6 +2399,49 @@ body {
 .tracking-back-button {
   margin-top: 20px;
   padding: 11px 16px;
+}
+
+.tracking-state-card {
+  width: min(100%, 680px);
+  margin: 80px auto;
+  padding: clamp(28px, 6vw, 54px);
+  border: 1px solid #dfe2dc;
+  border-radius: 24px;
+  text-align: center;
+  background: #fff;
+  box-shadow: 0 18px 50px #22382f12;
+}
+
+.tracking-state-card h1 {
+  margin: 8px 0 12px;
+  color: #173f35;
+}
+
+.tracking-state-card > p:last-of-type {
+  margin: 0 auto;
+  max-width: 520px;
+  color: #65716b;
+  line-height: 1.6;
+}
+
+.tracking-state-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+@media (max-width: 620px) {
+  .api-state,
+  .tracking-state-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .api-state button,
+  .tracking-state-actions button {
+    width: 100%;
+  }
 }
 
 .confirmation-actions {

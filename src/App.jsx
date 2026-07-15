@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { BatchHistory } from './components/BatchHistory'
 import BatchTimer from './components/BatchTimer'
@@ -7,9 +7,12 @@ import { KitchenActivityFeed } from './components/KitchenActivityFeed'
 import { LiveKitchenDashboard } from './components/KitchenMetrics'
 import { KitchenStatistics } from './components/KitchenStatistics'
 import { OrderTracking } from './components/OrderTracking'
+import { OrderTrackingState } from './components/OrderTrackingState'
+import { useKitchenOrders } from './hooks/useKitchenOrders'
+import { useTrackedOrder } from './hooks/useTrackedOrder'
+import { createOrder } from './services/ordersApi'
 import {
   buildKitchenActivity,
-  completeBatchOrders,
   completeBatchRecord,
   createBatchSnapshot,
   findActiveBatchRecord,
@@ -17,7 +20,6 @@ import {
   getBatchStartedAt,
   getKitchenMetrics,
   getProductionSummaryBatches,
-  startBatchOrders,
   startBatchRecord,
 } from './utils/kitchenIntelligence'
 
@@ -33,42 +35,49 @@ const menuItems = [
 const categories = ['All', 'Ready now', 'Meals', 'Snacks', 'Beverages']
 const pickupSlots = ['12:00 PM - 12:15 PM', '12:15 PM - 12:30 PM', '12:30 PM - 12:45 PM', '1:00 PM - 1:15 PM']
 
-function createOrderToken() {
-  return `CB-${crypto.randomUUID().slice(0, 4).toUpperCase()}`
-}
-
-const KITCHEN_ORDERS_KEY = 'campusbite-kitchen-orders'
 const KITCHEN_BATCHES_KEY = 'campusbite-kitchen-batches'
-const TRACKED_ORDER_KEY = 'campusbite-tracked-order-token'
-
-function loadKitchenOrders() {
-  try {
-    return JSON.parse(localStorage.getItem(KITCHEN_ORDERS_KEY)) || []
-  } catch {
-    return []
-  }
-}
+const TRACKED_ORDER_ID_KEY = 'campusbite-tracked-order-id'
 
 function loadKitchenBatches() {
   try {
-    return JSON.parse(localStorage.getItem(KITCHEN_BATCHES_KEY)) || []
+    const storedBatches =
+      JSON.parse(localStorage.getItem(KITCHEN_BATCHES_KEY)) || []
+
+    return storedBatches.map((batch) => ({
+      ...batch,
+      startedAt: normalizeStoredTimestamp(batch.startedAt),
+      completedAt: normalizeStoredTimestamp(batch.completedAt),
+    }))
   } catch {
     return []
   }
 }
 
-function loadTrackedOrderToken() {
-  return localStorage.getItem(TRACKED_ORDER_KEY)
+function normalizeStoredTimestamp(timestamp) {
+  if (!timestamp || timestamp.includes('T')) return timestamp
+  return `${timestamp.replace(' ', 'T')}Z`
+}
+
+function loadTrackedOrderId() {
+  const storedOrderId = Number(localStorage.getItem(TRACKED_ORDER_ID_KEY))
+  return Number.isSafeInteger(storedOrderId) && storedOrderId > 0
+    ? storedOrderId
+    : null
 }
 
 const KITCHEN_QUEUE_STATUSES = ['new', 'preparing', 'ready']
 
 function KitchenDashboard({
   batchRecords,
+  error,
+  isBusy,
+  isLoading,
   orders,
   onCompleteBatch,
+  onRetry,
   onStartBatch,
   onStatusChange,
+  pendingOrderIds,
 }) {
 
   const { activeBatches } = useMemo(
@@ -118,6 +127,23 @@ function KitchenDashboard({
           <strong>{activeOrders.length}</strong> active orders
         </div>
       </section>
+
+      {error && (
+        <div className="api-state api-state-error" role="alert">
+          <div>
+            <strong>Kitchen service needs attention</strong>
+            <span>{error}</span>
+          </div>
+          <button type="button" onClick={onRetry}>Retry</button>
+        </div>
+      )}
+
+      {isLoading && orders.length === 0 && (
+        <div className="api-state" role="status">
+          <strong>Loading kitchen orders…</strong>
+          <span>Connecting to the shared CampusBite order queue.</span>
+        </div>
+      )}
 
       <LiveKitchenDashboard metrics={metrics} />
 
@@ -175,8 +201,9 @@ function KitchenDashboard({
                 className="primary-action"
                 type="button"
                 onClick={() => onCompleteBatch(batch)}
+                disabled={isBusy}
               >
-                Complete Batch
+                {isBusy ? 'Updating…' : 'Complete Batch'}
               </button>
             </div>
           ) : (
@@ -184,8 +211,9 @@ function KitchenDashboard({
               className="primary-action"
               type="button"
               onClick={() => onStartBatch(batch)}
+              disabled={isBusy}
             >
-              Start Batch Preparation
+              {isBusy ? 'Updating…' : 'Start Batch Preparation'}
             </button>
           )}
         </article>
@@ -245,18 +273,24 @@ function KitchenDashboard({
                       {status === 'new' && (
                         <button
                           onClick={() =>
-                            onStatusChange(order.token, 'preparing')
+                            onStatusChange(order.id, 'preparing')
                           }
+                          disabled={pendingOrderIds.includes(order.id)}
                         >
-                          Start preparing
+                          {pendingOrderIds.includes(order.id)
+                            ? 'Updating…'
+                            : 'Start preparing'}
                         </button>
                       )}
 
                       {status === 'preparing' && (
                         <button
-                          onClick={() => onStatusChange(order.token, 'ready')}
+                          onClick={() => onStatusChange(order.id, 'ready')}
+                          disabled={pendingOrderIds.includes(order.id)}
                         >
-                          Mark ready
+                          {pendingOrderIds.includes(order.id)
+                            ? 'Updating…'
+                            : 'Mark ready'}
                         </button>
                       )}
                     </article>
@@ -310,14 +344,41 @@ function App() {
   const [pickupSlot, setPickupSlot] = useState(pickupSlots[0])
   const [instructions, setInstructions] = useState('')
   const [confirmedOrder, setConfirmedOrder] = useState(null)
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
+  const [orderSubmitError, setOrderSubmitError] = useState('')
   const [activeView, setActiveView] = useState('student')
-  const [kitchenOrders, setKitchenOrders] = useState(loadKitchenOrders)
   const [kitchenBatches, setKitchenBatches] = useState(loadKitchenBatches)
-  const [trackedOrderToken, setTrackedOrderToken] = useState(
-    loadTrackedOrderToken,
-  )
+  const [trackedOrderId, setTrackedOrderId] = useState(loadTrackedOrderId)
   const [studentView, setStudentView] = useState(() =>
-    loadTrackedOrderToken() ? 'tracking' : 'menu',
+    loadTrackedOrderId() ? 'tracking' : 'menu',
+  )
+  const checkoutRequestId = useRef(null)
+  const checkoutSignature = JSON.stringify({
+    cart,
+    instructions: instructions.trim(),
+    pickupMethod,
+    pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
+  })
+  const checkoutSignatureRef = useRef(checkoutSignature)
+  const joiningOrderIds = useRef(new Set())
+  const {
+    addOrder: addKitchenOrder,
+    error: kitchenError,
+    isLoading: isKitchenLoading,
+    orders: kitchenOrders,
+    pendingOrderIds,
+    refreshOrders,
+    updateOrderStatus: updateKitchenOrderStatus,
+  } = useKitchenOrders()
+  const {
+    error: trackingError,
+    isLoading: isTrackingLoading,
+    order: trackedOrder,
+    refreshOrder: refreshTrackedOrder,
+    setOrder: setTrackedOrder,
+  } = useTrackedOrder(
+    trackedOrderId,
+    activeView === 'student' && studentView === 'tracking',
   )
 
   useEffect(() => {
@@ -325,29 +386,77 @@ function App() {
   }, [activeView, studentView])
 
   useEffect(() => {
-    localStorage.setItem(KITCHEN_ORDERS_KEY, JSON.stringify(kitchenOrders))
-  }, [kitchenOrders])
-
-  useEffect(() => {
     localStorage.setItem(KITCHEN_BATCHES_KEY, JSON.stringify(kitchenBatches))
   }, [kitchenBatches])
 
   useEffect(() => {
-    if (trackedOrderToken) {
-      localStorage.setItem(TRACKED_ORDER_KEY, trackedOrderToken)
+    if (trackedOrderId) {
+      localStorage.setItem(TRACKED_ORDER_ID_KEY, String(trackedOrderId))
     }
-  }, [trackedOrderToken])
+  }, [trackedOrderId])
+
+  useEffect(() => {
+    if (
+      checkoutSignatureRef.current !== checkoutSignature &&
+      !isSubmittingOrder
+    ) {
+      checkoutSignatureRef.current = checkoutSignature
+      checkoutRequestId.current = null
+      setOrderSubmitError('')
+    }
+  }, [checkoutSignature, isSubmittingOrder])
+
+  useEffect(() => {
+    const activeBatchRecords = kitchenBatches.filter(
+      (batch) => batch.status === 'preparing',
+    )
+
+    kitchenOrders
+      .filter((order) => order.status === 'new')
+      .forEach((order) => {
+        const matchingRecord = activeBatchRecords.find((batch) =>
+          order.items.some((item) => item.name === batch.itemName),
+        )
+
+        if (!matchingRecord || joiningOrderIds.current.has(order.id)) return
+
+        joiningOrderIds.current.add(order.id)
+        updateKitchenOrderStatus(order.id, 'preparing', {
+          batchItem: matchingRecord.itemName,
+        })
+          .then(() => {
+            setKitchenBatches((records) =>
+              records.map((record) => {
+                if (
+                  record.id !== matchingRecord.id ||
+                  record.linkedOrders.includes(order.token)
+                ) {
+                  return record
+                }
+
+                const addedQuantity = order.items
+                  .filter((item) => item.name === record.itemName)
+                  .reduce((total, item) => total + item.quantity, 0)
+
+                return {
+                  ...record,
+                  linkedOrders: [...record.linkedOrders, order.token],
+                  requiredQuantity: record.requiredQuantity + addedQuantity,
+                }
+              }),
+            )
+          })
+          .catch(() => {
+            // The shared kitchen error banner provides the retry path.
+          })
+          .finally(() => joiningOrderIds.current.delete(order.id))
+      })
+  }, [kitchenBatches, kitchenOrders, updateKitchenOrderStatus])
 
   const visibleItems = activeCategory === 'All' ? menuItems : menuItems.filter((item) => item.category === activeCategory)
   const cartItems = menuItems.filter((item) => cart[item.id])
   const cartCount = cartItems.reduce((total, item) => total + cart[item.id], 0)
   const cartTotal = cartItems.reduce((total, item) => total + item.price * cart[item.id], 0)
-  const trackedOrder = useMemo(
-    () =>
-      kitchenOrders.find((order) => order.token === trackedOrderToken) || null,
-    [kitchenOrders, trackedOrderToken],
-  )
-
   function addItem(itemId) {
     setCart((currentCart) => ({ ...currentCart, [itemId]: (currentCart[itemId] || 0) + 1 }))
   }
@@ -367,77 +476,126 @@ function App() {
 
   function openCheckout() {
     setIsCartOpen(false)
+    setOrderSubmitError('')
+    checkoutRequestId.current = null
+    checkoutSignatureRef.current = checkoutSignature
     setCheckoutStep('details')
   }
 
-  function confirmOrder() {
-    const token = createOrderToken()
-    const createdAt = new Date().toISOString()
-    const confirmed = {
-      token,
-      items: cartItems.map((item) => ({
-  ...item,
-  quantity: cart[item.id],
-  preparedQuantity: 0,
-})),
-      total: cartTotal,
-      pickupMethod,
-      pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
-      instructions: instructions.trim(), source: 'Student app', createdAt, status: 'new',
-      statusHistory: [{ status: 'new', at: createdAt }],
+  async function confirmOrder() {
+    if (isSubmittingOrder || cartItems.length === 0) return
+
+    const requestId = checkoutRequestId.current || crypto.randomUUID()
+    checkoutRequestId.current = requestId
+    setIsSubmittingOrder(true)
+    setOrderSubmitError('')
+
+    try {
+      const savedOrder = await createOrder({
+        clientRequestId: requestId,
+        items: cartItems.map((item) => ({
+          menuItemId: item.id,
+          name: item.name,
+          quantity: cart[item.id],
+          unitPricePaise: item.price * 100,
+          preparationType:
+            item.category === 'Ready now' ? 'ready' : 'made-to-order',
+          preparationTime: item.time,
+        })),
+        pickupMethod,
+        pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
+        instructions: instructions.trim(),
+        source: 'student',
+      })
+
+      setConfirmedOrder(savedOrder)
+      setTrackedOrderId(savedOrder.id)
+      setTrackedOrder(savedOrder)
+      addKitchenOrder(savedOrder)
+      setCart({})
+      setCheckoutStep('confirmation')
+      checkoutRequestId.current = null
+    } catch (error) {
+      setOrderSubmitError(error.message)
+    } finally {
+      setIsSubmittingOrder(false)
     }
-    setConfirmedOrder(confirmed)
-    setTrackedOrderToken(token)
-    setKitchenOrders((orders) => [...orders, confirmed])
-    setCart({})
-    setCheckoutStep('confirmation')
   }
 
-function updateOrderStatus(token, status) {
-  const at = new Date().toISOString()
+  async function updateOrderStatus(orderId, status) {
+    try {
+      await updateKitchenOrderStatus(orderId, status)
+    } catch {
+      // The kitchen error banner keeps the failed server state visible.
+    }
+  }
 
-  setKitchenOrders((orders) =>
-    orders.map((order) =>
-      order.token === token
-        ? {
-            ...order,
-            status,
-            statusHistory: [
-              ...(order.statusHistory || []),
-              { status, at }
-            ]
-          }
-        : order
+  async function startBatch(batch) {
+    const batchSnapshot = createBatchSnapshot(batch, kitchenOrders, 'new')
+    const linkedOrders = kitchenOrders.filter(
+      (order) =>
+        batchSnapshot.linkedOrders.includes(order.token) &&
+        order.status === 'new',
     )
-  )
-}
-function startBatch(batch) {
-  const startedAt = new Date().toISOString()
-  const batchSnapshot = createBatchSnapshot(batch, kitchenOrders, 'new')
 
-  if (batchSnapshot.linkedOrders.length === 0) return
+    if (linkedOrders.length === 0) return
 
-  setKitchenOrders((orders) =>
-    startBatchOrders(orders, batchSnapshot, startedAt),
-  )
-  setKitchenBatches((records) =>
-    startBatchRecord(records, batchSnapshot, startedAt),
-  )
-}
+    const results = await Promise.allSettled(
+      linkedOrders.map((order) =>
+        updateKitchenOrderStatus(order.id, 'preparing', {
+          batchItem: batch.itemName,
+        }),
+      ),
+    )
+    const updatedOrders = results
+      .filter((result) => result.status === 'fulfilled')
+      .map((result) => result.value)
 
-function completeBatch(batch) {
-  const completedAt = new Date().toISOString()
-  const batchSnapshot = createBatchSnapshot(batch, kitchenOrders, 'preparing')
+    if (updatedOrders.length > 0) {
+      const startedAt =
+        updatedOrders[0].statusHistory.at(-1)?.at || new Date().toISOString()
+      setKitchenBatches((records) =>
+        startBatchRecord(records, batchSnapshot, startedAt),
+      )
+    }
 
-  if (batchSnapshot.linkedOrders.length === 0) return
+    if (results.some((result) => result.status === 'rejected')) {
+      await refreshOrders({ silent: true })
+    }
+  }
 
-  setKitchenOrders((orders) =>
-    completeBatchOrders(orders, batchSnapshot, completedAt),
-  )
-  setKitchenBatches((records) =>
-    completeBatchRecord(records, batchSnapshot, completedAt),
-  )
-}
+  async function completeBatch(batch) {
+    const batchSnapshot = createBatchSnapshot(
+      batch,
+      kitchenOrders,
+      'preparing',
+    )
+    const linkedOrders = kitchenOrders.filter(
+      (order) =>
+        batchSnapshot.linkedOrders.includes(order.token) &&
+        order.status === 'preparing',
+    )
+
+    if (linkedOrders.length === 0) return
+
+    const results = await Promise.allSettled(
+      linkedOrders.map((order) =>
+        updateKitchenOrderStatus(order.id, 'ready', {
+          batchItem: batch.itemName,
+        }),
+      ),
+    )
+
+    if (results.every((result) => result.status === 'fulfilled')) {
+      const completedAt =
+        results[0].value.statusHistory.at(-1)?.at || new Date().toISOString()
+      setKitchenBatches((records) =>
+        completeBatchRecord(records, batchSnapshot, completedAt),
+      )
+    } else {
+      await refreshOrders({ silent: true })
+    }
+  }
   function finishOrder() {
     setCheckoutStep(null)
     setConfirmedOrder(null)
@@ -482,7 +640,7 @@ function completeBatch(batch) {
             </button>
           </div>
 
-          {activeView === 'student' && trackedOrder && (
+          {activeView === 'student' && trackedOrderId && (
             <button
               className={`header-track${studentView === 'tracking' ? ' active' : ''}`}
               type="button"
@@ -490,7 +648,7 @@ function completeBatch(batch) {
                 setStudentView('tracking')
                 setIsCartOpen(false)
               }}
-              aria-label={`Track order ${trackedOrder.token}`}
+              aria-label={`Track order ${trackedOrder?.token || trackedOrderId}`}
             >
               <span aria-hidden="true">◎</span>
               <span>Track order</span>
@@ -513,16 +671,30 @@ function completeBatch(batch) {
       {activeView === 'kitchen' ? 
       <KitchenDashboard
   batchRecords={kitchenBatches}
+  error={kitchenError}
+  isBusy={pendingOrderIds.length > 0}
+  isLoading={isKitchenLoading}
   orders={kitchenOrders}
   onStartBatch={startBatch}
   onCompleteBatch={completeBatch}
+  onRetry={() => refreshOrders()}
   onStatusChange={updateOrderStatus}
+  pendingOrderIds={pendingOrderIds}
 /> : <>
-      {studentView === 'tracking' && trackedOrder ? (
-        <OrderTracking
-          order={trackedOrder}
-          onBackToMenu={() => setStudentView('menu')}
-        />
+      {studentView === 'tracking' ? (
+        trackedOrder ? (
+          <OrderTracking
+            order={trackedOrder}
+            onBackToMenu={() => setStudentView('menu')}
+          />
+        ) : (
+          <OrderTrackingState
+            error={trackingError}
+            isLoading={isTrackingLoading}
+            onBackToMenu={() => setStudentView('menu')}
+            onRetry={refreshTrackedOrder}
+          />
+        )
       ) : (
       <main id="top">
         <section className="welcome-card">
@@ -660,7 +832,22 @@ function completeBatch(batch) {
                 </div>
                 <div className="pickup-summary"><span>Pickup</span><strong>{pickupMethod === 'scheduled' ? pickupSlot : 'As soon as ready'}</strong>{instructions.trim() && <small>Note: {instructions.trim()}</small>}</div>
                 <div className="demo-notice">No payment will be charged. Payment verification will be connected in a later sprint.</div>
-                <button className="primary-action" type="button" onClick={confirmOrder}>Confirm test order · ₹{cartTotal}</button>
+                {orderSubmitError && (
+                  <div className="checkout-api-error" role="alert">
+                    <strong>Order not saved</strong>
+                    <span>{orderSubmitError} Your cart is still here—please try again.</span>
+                  </div>
+                )}
+                <button
+                  className="primary-action"
+                  type="button"
+                  onClick={confirmOrder}
+                  disabled={isSubmittingOrder}
+                >
+                  {isSubmittingOrder
+                    ? 'Saving your order…'
+                    : `Confirm test order · ₹${cartTotal}`}
+                </button>
               </div>
             )}
 

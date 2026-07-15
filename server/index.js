@@ -2,7 +2,9 @@ import { createServer } from 'node:http'
 import { serverConfig } from './config.js'
 import { initializeDatabase } from './db.js'
 import { handleHealthCheck } from './routes/health.js'
+import { handleOrderRoutes } from './routes/orders.js'
 import {
+  sendApiError,
   sendInternalServerError,
   sendNotFound,
 } from './services/http.js'
@@ -17,7 +19,7 @@ try {
   process.exit(1)
 }
 
-const server = createServer((request, response) => {
+const server = createServer(async (request, response) => {
   try {
     const requestUrl = new URL(
       request.url || '/',
@@ -29,8 +31,24 @@ const server = createServer((request, response) => {
       return
     }
 
+    if (
+      await handleOrderRoutes(
+        request,
+        response,
+        requestUrl,
+        database,
+      )
+    ) {
+      return
+    }
+
     sendNotFound(response)
   } catch (error) {
+    if (error.statusCode) {
+      sendApiError(response, error)
+      return
+    }
+
     console.error('[campusbite-api] Unexpected request error.', error)
 
     if (!response.headersSent) {

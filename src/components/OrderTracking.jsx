@@ -23,6 +23,23 @@ const STATUS_INDEX = Object.fromEntries(
   ORDER_STEPS.map((step, index) => [step.status, index]),
 )
 
+const moneyFormatter = new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  maximumFractionDigits: 2,
+})
+
+function formatTimestamp(timestamp) {
+  if (!timestamp) return 'Not available'
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return 'Not available'
+
+  return new Intl.DateTimeFormat('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date)
+}
+
 function getEstimatedPreparationTime(order) {
   if (order.status === 'ready') return 'Ready now'
 
@@ -93,6 +110,10 @@ export function OrderTracking({ onBackToMenu, order }) {
                   ? 'current'
                   : 'upcoming'
 
+            const statusTimestamp = (order.statusHistory || []).find(
+              (entry) => entry.status === step.status,
+            )?.at
+
             return (
               <li className={stepState} key={step.status}>
                 <span className="tracking-step-icon" aria-hidden="true">
@@ -100,7 +121,12 @@ export function OrderTracking({ onBackToMenu, order }) {
                 </span>
                 <div>
                   <strong>{step.label}</strong>
-                  <small>{step.description}</small>
+                  <small>
+                    {step.description}
+                    {statusTimestamp
+                      ? ` · ${formatTimestamp(statusTimestamp)}`
+                      : ''}
+                  </small>
                 </div>
               </li>
             )
@@ -137,6 +163,18 @@ export function OrderTracking({ onBackToMenu, order }) {
             <div>
               <dt>Estimated Preparation Time</dt>
               <dd>{getEstimatedPreparationTime(order)}</dd>
+            </div>
+            <div>
+              <dt>Order Total</dt>
+              <dd>{moneyFormatter.format(order.total)}</dd>
+            </div>
+            <div>
+              <dt>Placed At</dt>
+              <dd>{formatTimestamp(order.createdAt)}</dd>
+            </div>
+            <div>
+              <dt>Last Updated</dt>
+              <dd>{formatTimestamp(order.updatedAt)}</dd>
             </div>
           </dl>
 

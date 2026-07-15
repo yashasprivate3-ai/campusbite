@@ -2,16 +2,16 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
-const schema = `
+const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     token TEXT NOT NULL UNIQUE,
     pickup_method TEXT NOT NULL CHECK (pickup_method IN ('asap', 'scheduled')),
     pickup_slot TEXT,
     instructions TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL DEFAULT 'Student app',
+    source TEXT NOT NULL DEFAULT 'student',
     total_amount INTEGER NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
     status TEXT NOT NULL DEFAULT 'new'
       CHECK (status IN ('new', 'preparing', 'ready')),
@@ -77,6 +77,40 @@ const schema = `
   CREATE INDEX IF NOT EXISTS idx_activity_events_occurred_at ON activity_events(occurred_at);
 `
 
+function hasColumn(database, tableName, columnName) {
+  return database
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all()
+    .some((column) => column.name === columnName)
+}
+
+function addColumnIfMissing(database, tableName, columnName, definition) {
+  if (!hasColumn(database, tableName, columnName)) {
+    database.exec(
+      `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition};`,
+    )
+  }
+}
+
+function migrateToVersion2(database) {
+  addColumnIfMissing(database, 'orders', 'client_request_id', 'TEXT')
+  addColumnIfMissing(database, 'orders', 'request_fingerprint', 'TEXT')
+  addColumnIfMissing(
+    database,
+    'order_items',
+    'unit_price_paise',
+    'INTEGER NOT NULL DEFAULT 0 CHECK (unit_price_paise >= 0)',
+  )
+  addColumnIfMissing(database, 'order_items', 'preparation_type', 'TEXT')
+  addColumnIfMissing(database, 'order_items', 'preparation_time', 'TEXT')
+
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_client_request_id
+      ON orders(client_request_id)
+      WHERE client_request_id IS NOT NULL;
+  `)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -85,8 +119,24 @@ export function initializeDatabase(databasePath) {
   try {
     database.exec('PRAGMA foreign_keys = ON;')
     database.exec('PRAGMA journal_mode = WAL;')
-    database.exec('BEGIN;')
-    database.exec(schema)
+    database.exec('PRAGMA busy_timeout = 5000;')
+    database.exec('BEGIN IMMEDIATE;')
+
+    const currentVersion = database.prepare('PRAGMA user_version').get()
+      .user_version
+
+    if (currentVersion > SCHEMA_VERSION) {
+      throw new Error(
+        `Database schema version ${currentVersion} is newer than supported version ${SCHEMA_VERSION}.`,
+      )
+    }
+
+    database.exec(baseSchema)
+
+    if (currentVersion < 2) {
+      migrateToVersion2(database)
+    }
+
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
     database.exec('COMMIT;')
     return database

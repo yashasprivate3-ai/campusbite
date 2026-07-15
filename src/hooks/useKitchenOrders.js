@@ -17,7 +17,7 @@ function replaceIfChanged(currentOrders, nextOrders) {
     : sortedOrders
 }
 
-export function useKitchenOrders() {
+export function useKitchenOrders(enabled = true) {
   const [orders, setOrders] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
@@ -65,6 +65,15 @@ export function useKitchenOrders() {
 
   useEffect(() => {
     isMounted.current = true
+
+    if (!enabled) {
+      const disabledTimer = window.setTimeout(() => setIsLoading(false), 0)
+      return () => {
+        isMounted.current = false
+        window.clearTimeout(disabledTimer)
+      }
+    }
+
     const initialTimer = window.setTimeout(refreshOrders, 0)
     const pollTimer = window.setInterval(
       () => refreshOrders({ silent: true }),
@@ -80,7 +89,7 @@ export function useKitchenOrders() {
       activeRequest.current = null
       controller?.abort()
     }
-  }, [refreshOrders])
+  }, [enabled, refreshOrders])
 
   const updateOrderStatus = useCallback(
     async (orderId, status, options = {}) => {

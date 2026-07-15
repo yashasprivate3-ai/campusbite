@@ -42,6 +42,12 @@ export function sendApiError(response, error) {
   }
 
   if (error.details !== undefined) payload.details = error.details
+  if (error.code === 'too_many_login_attempts') {
+    response.setHeader(
+      'Retry-After',
+      String(error.details?.retryAfterSeconds || 60),
+    )
+  }
   sendJson(response, error.statusCode || 500, payload)
 }
 

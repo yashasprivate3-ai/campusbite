@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -111,6 +111,92 @@ function migrateToVersion2(database) {
   `)
 }
 
+function migrateToVersion3(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      public_id TEXT NOT NULL UNIQUE,
+      role TEXT NOT NULL CHECK (role IN ('OWNER', 'KITCHEN', 'STUDENT')),
+      display_name TEXT NOT NULL,
+      email TEXT,
+      phone_number TEXT,
+      phone_verified INTEGER NOT NULL DEFAULT 0
+        CHECK (phone_verified IN (0, 1)),
+      status TEXT NOT NULL DEFAULT 'ACTIVE'
+        CHECK (status IN ('ACTIVE', 'DISABLED')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS auth_identities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      provider TEXT NOT NULL
+        CHECK (provider IN ('LOCAL', 'GOOGLE', 'WHATSAPP_PHONE', 'SMS_PHONE')),
+      provider_subject TEXT,
+      login_identifier TEXT,
+      password_hash TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE (provider, provider_subject)
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      revoked_at TEXT,
+      user_agent TEXT,
+      created_ip TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS auth_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      event_type TEXT NOT NULL,
+      success INTEGER NOT NULL CHECK (success IN (0, 1)),
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized
+      ON users(lower(email))
+      WHERE email IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_users_role_status
+      ON users(role, status);
+    CREATE INDEX IF NOT EXISTS idx_auth_identities_user_id
+      ON auth_identities(user_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_identities_login
+      ON auth_identities(provider, lower(login_identifier))
+      WHERE login_identifier IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_id
+      ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires_at
+      ON sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_auth_events_user_id
+      ON auth_events(user_id);
+    CREATE INDEX IF NOT EXISTS idx_auth_events_created_at
+      ON auth_events(created_at);
+  `)
+
+  addColumnIfMissing(
+    database,
+    'orders',
+    'student_user_id',
+    'INTEGER REFERENCES users(id) ON DELETE SET NULL',
+  )
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_orders_student_user_id
+      ON orders(student_user_id);
+  `)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -135,6 +221,10 @@ export function initializeDatabase(databasePath) {
 
     if (currentVersion < 2) {
       migrateToVersion2(database)
+    }
+
+    if (currentVersion < 3) {
+      migrateToVersion3(database)
     }
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)

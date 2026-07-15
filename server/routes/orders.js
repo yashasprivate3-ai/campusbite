@@ -11,6 +11,13 @@ import {
   sendMethodNotAllowed,
 } from '../services/http.js'
 import { invalidRequest } from '../services/apiError.js'
+import {
+  optionalAuth,
+  requireAnyRole,
+  requireAuth,
+  requireRole,
+  ROLES,
+} from '../services/authorization.js'
 
 function parseOrderId(value) {
   const orderId = Number(value)
@@ -48,10 +55,21 @@ export async function handleOrderRoutes(
   response,
   requestUrl,
   database,
+  authConfig,
 ) {
   if (requestUrl.pathname === '/api/orders') {
     if (request.method === 'POST') {
-      const result = createOrder(database, await readJsonBody(request))
+      const authContext = requireRole(
+        database,
+        optionalAuth(database, request, authConfig),
+        ROLES.STUDENT,
+        request,
+      )
+      const result = createOrder(
+        database,
+        await readJsonBody(request),
+        authContext.internalUserId,
+      )
       sendJson(response, result.created ? 201 : 200, {
         created: result.created,
         order: result.order,
@@ -60,6 +78,12 @@ export async function handleOrderRoutes(
     }
 
     if (request.method === 'GET') {
+      requireAnyRole(
+        database,
+        optionalAuth(database, request, authConfig),
+        [ROLES.OWNER, ROLES.KITCHEN],
+        request,
+      )
       const statuses = parseStatuses(requestUrl)
       sendJson(response, 200, { orders: listOrders(database, statuses) })
       return true
@@ -79,6 +103,12 @@ export async function handleOrderRoutes(
       return true
     }
 
+    requireAnyRole(
+      database,
+      optionalAuth(database, request, authConfig),
+      [ROLES.OWNER, ROLES.KITCHEN],
+      request,
+    )
     const order = updateOrderStatus(
       database,
       parseOrderId(statusMatch[1]),
@@ -96,9 +126,25 @@ export async function handleOrderRoutes(
       return true
     }
 
-    sendJson(response, 200, {
-      order: getOrder(database, parseOrderId(orderMatch[1])),
-    })
+    const authContext = requireAuth(
+      optionalAuth(database, request, authConfig),
+    )
+    const orderId = parseOrderId(orderMatch[1])
+
+    if (authContext.user.role === ROLES.STUDENT) {
+      sendJson(response, 200, {
+        order: getOrder(database, orderId, authContext.internalUserId),
+      })
+      return true
+    }
+
+    requireAnyRole(
+      database,
+      authContext,
+      [ROLES.OWNER, ROLES.KITCHEN],
+      request,
+    )
+    sendJson(response, 200, { order: getOrder(database, orderId) })
     return true
   }
 

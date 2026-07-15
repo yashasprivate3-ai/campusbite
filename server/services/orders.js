@@ -128,7 +128,7 @@ function normalizeCreatePayload(payload) {
     pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
     instructions:
       optionalString(payload.instructions, 'instructions', 120) || '',
-    source: optionalString(payload.source, 'source', 40) || 'student',
+    source: 'student',
     items,
     totalPaise,
   }
@@ -236,7 +236,8 @@ function selectOrderRow(database, orderId) {
   return database
     .prepare(
       `SELECT id, token, client_request_id, request_fingerprint,
-              pickup_method, pickup_slot, instructions, source, total_amount,
+              student_user_id, pickup_method, pickup_slot, instructions,
+              source, total_amount,
               status, created_at, updated_at
          FROM orders
         WHERE id = ?`,
@@ -258,20 +259,33 @@ function getOrderOrNull(database, orderId) {
 function findIdempotentOrder(database, clientRequestId) {
   return database
     .prepare(
-      `SELECT id, request_fingerprint
+      `SELECT id, request_fingerprint, student_user_id
          FROM orders
         WHERE client_request_id = ?`,
     )
     .get(clientRequestId)
 }
 
-function resolveIdempotentOrder(database, normalizedOrder, fingerprint) {
+function resolveIdempotentOrder(
+  database,
+  normalizedOrder,
+  fingerprint,
+  studentUserId,
+) {
   const existing = findIdempotentOrder(
     database,
     normalizedOrder.clientRequestId,
   )
 
   if (!existing) return null
+
+  if (existing.student_user_id !== studentUserId) {
+    throw new ApiError(
+      409,
+      'idempotency_conflict',
+      'This checkout request ID cannot be reused.',
+    )
+  }
 
   if (
     existing.request_fingerprint &&
@@ -298,13 +312,18 @@ function createUniqueToken(database) {
   throw new Error('Unable to allocate a unique order token.')
 }
 
-export function createOrder(database, payload) {
+export function createOrder(database, payload, studentUserId) {
+  if (!Number.isSafeInteger(studentUserId) || studentUserId < 1) {
+    throw new Error('Authenticated student ownership is required.')
+  }
+
   const normalizedOrder = normalizeCreatePayload(payload)
   const fingerprint = createFingerprint(normalizedOrder)
   const existingOrder = resolveIdempotentOrder(
     database,
     normalizedOrder,
     fingerprint,
+    studentUserId,
   )
 
   if (existingOrder) return { created: false, order: existingOrder }
@@ -316,6 +335,7 @@ export function createOrder(database, payload) {
       database,
       normalizedOrder,
       fingerprint,
+      studentUserId,
     )
 
     if (concurrentOrder) {
@@ -326,15 +346,17 @@ export function createOrder(database, payload) {
     const token = createUniqueToken(database)
     const orderResult = database
       .prepare(
-        `INSERT INTO orders (
-           token, client_request_id, request_fingerprint, pickup_method,
-           pickup_slot, instructions, source, total_amount, status
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new')`,
+         `INSERT INTO orders (
+           token, client_request_id, request_fingerprint, student_user_id,
+           pickup_method, pickup_slot, instructions, source, total_amount,
+           status
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')`,
       )
       .run(
         token,
         normalizedOrder.clientRequestId,
         fingerprint,
+        studentUserId,
         normalizedOrder.pickupMethod,
         normalizedOrder.pickupSlot,
         normalizedOrder.instructions,
@@ -384,6 +406,7 @@ export function createOrder(database, payload) {
         database,
         normalizedOrder,
         fingerprint,
+        studentUserId,
       )
       if (idempotentOrder) return { created: false, order: idempotentOrder }
     }
@@ -400,7 +423,8 @@ export function listOrders(database, statuses = []) {
   const rows = database
     .prepare(
       `SELECT id, token, client_request_id, request_fingerprint,
-              pickup_method, pickup_slot, instructions, source, total_amount,
+              student_user_id, pickup_method, pickup_slot, instructions,
+              source, total_amount,
               status, created_at, updated_at
          FROM orders
          ${whereClause}
@@ -417,8 +441,11 @@ export function listOrders(database, statuses = []) {
   )
 }
 
-export function getOrder(database, orderId) {
-  const order = getOrderOrNull(database, orderId)
+export function getOrder(database, orderId, studentUserId) {
+  const row = selectOrderRow(database, orderId)
+  const isOwnedByStudent =
+    studentUserId === undefined || row?.student_user_id === studentUserId
+  const order = row && isOwnedByStudent ? getOrderOrNull(database, orderId) : null
 
   if (!order) {
     throw new ApiError(404, 'order_not_found', 'The requested order was not found.')

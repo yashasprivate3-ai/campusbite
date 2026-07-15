@@ -58,20 +58,19 @@ export function useTrackedOrder(orderId, enabled) {
       return () => window.clearTimeout(initialTimer)
     }
 
-    initialTimer = window.setTimeout(() => {
-      setIsLoading(true)
-      refreshOrder()
-    }, 0)
-
     if (!enabled) {
       return () => {
-        window.clearTimeout(initialTimer)
         requestSequence.current += 1
         const controller = activeRequest.current
         activeRequest.current = null
         controller?.abort()
       }
     }
+
+    initialTimer = window.setTimeout(() => {
+      setIsLoading(true)
+      refreshOrder()
+    }, 0)
 
     const pollTimer = window.setInterval(
       refreshOrder,

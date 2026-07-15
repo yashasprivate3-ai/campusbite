@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import { useAuth } from './auth/useAuth'
+import { AuthLoadingScreen } from './components/AuthLoadingScreen'
 import { BatchHistory } from './components/BatchHistory'
 import BatchTimer from './components/BatchTimer'
 import { CollapsiblePanel } from './components/CollapsiblePanel'
 import { KitchenActivityFeed } from './components/KitchenActivityFeed'
 import { LiveKitchenDashboard } from './components/KitchenMetrics'
 import { KitchenStatistics } from './components/KitchenStatistics'
+import { LoginScreen } from './components/LoginScreen'
 import { OrderTracking } from './components/OrderTracking'
 import { OrderTrackingState } from './components/OrderTrackingState'
+import { OwnerWorkspace } from './components/OwnerWorkspace'
+import { SessionControls } from './components/SessionControls'
 import { useKitchenOrders } from './hooks/useKitchenOrders'
 import { useTrackedOrder } from './hooks/useTrackedOrder'
 import { createOrder } from './services/ordersApi'
@@ -36,7 +41,8 @@ const categories = ['All', 'Ready now', 'Meals', 'Snacks', 'Beverages']
 const pickupSlots = ['12:00 PM - 12:15 PM', '12:15 PM - 12:30 PM', '12:30 PM - 12:45 PM', '1:00 PM - 1:15 PM']
 
 const KITCHEN_BATCHES_KEY = 'campusbite-kitchen-batches'
-const TRACKED_ORDER_ID_KEY = 'campusbite-tracked-order-id'
+const STUDENT_CART_KEY_PREFIX = 'campusbite-student-cart'
+const TRACKED_ORDER_ID_KEY_PREFIX = 'campusbite-tracked-order-id'
 
 function loadKitchenBatches() {
   try {
@@ -58,8 +64,30 @@ function normalizeStoredTimestamp(timestamp) {
   return `${timestamp.replace(' ', 'T')}Z`
 }
 
-function loadTrackedOrderId() {
-  const storedOrderId = Number(localStorage.getItem(TRACKED_ORDER_ID_KEY))
+function getStudentStorageKey(prefix, publicId) {
+  return `${prefix}:${publicId}`
+}
+
+function loadStudentCart(publicId) {
+  try {
+    return (
+      JSON.parse(
+        localStorage.getItem(
+          getStudentStorageKey(STUDENT_CART_KEY_PREFIX, publicId),
+        ),
+      ) || {}
+    )
+  } catch {
+    return {}
+  }
+}
+
+function loadTrackedOrderId(publicId) {
+  const storedOrderId = Number(
+    localStorage.getItem(
+      getStudentStorageKey(TRACKED_ORDER_ID_KEY_PREFIX, publicId),
+    ),
+  )
   return Number.isSafeInteger(storedOrderId) && storedOrderId > 0
     ? storedOrderId
     : null
@@ -335,9 +363,19 @@ function KitchenDashboard({
     </main>
   )
 }
-function App() {
+function getDefaultView(role) {
+  if (role === 'OWNER') return 'owner'
+  if (role === 'KITCHEN') return 'kitchen'
+  return 'student'
+}
+
+function CampusBiteWorkspace({ user }) {
+  const { error: authError, isLoggingOut, logout } = useAuth()
+  const canUseKitchen = user.role === 'OWNER' || user.role === 'KITCHEN'
   const [activeCategory, setActiveCategory] = useState('All')
-  const [cart, setCart] = useState({})
+  const [cart, setCart] = useState(() =>
+    user.role === 'STUDENT' ? loadStudentCart(user.publicId) : {},
+  )
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [checkoutStep, setCheckoutStep] = useState(null)
   const [pickupMethod, setPickupMethod] = useState('asap')
@@ -346,11 +384,19 @@ function App() {
   const [confirmedOrder, setConfirmedOrder] = useState(null)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [orderSubmitError, setOrderSubmitError] = useState('')
-  const [activeView, setActiveView] = useState('student')
-  const [kitchenBatches, setKitchenBatches] = useState(loadKitchenBatches)
-  const [trackedOrderId, setTrackedOrderId] = useState(loadTrackedOrderId)
+  const [activeView, setActiveView] = useState(() =>
+    getDefaultView(user.role),
+  )
+  const [kitchenBatches, setKitchenBatches] = useState(() =>
+    canUseKitchen ? loadKitchenBatches() : [],
+  )
+  const [trackedOrderId, setTrackedOrderId] = useState(() =>
+    user.role === 'STUDENT' ? loadTrackedOrderId(user.publicId) : null,
+  )
   const [studentView, setStudentView] = useState(() =>
-    loadTrackedOrderId() ? 'tracking' : 'menu',
+    user.role === 'STUDENT' && loadTrackedOrderId(user.publicId)
+      ? 'tracking'
+      : 'menu',
   )
   const checkoutRequestId = useRef(null)
   const checkoutSignature = JSON.stringify({
@@ -362,14 +408,13 @@ function App() {
   const checkoutSignatureRef = useRef(checkoutSignature)
   const joiningOrderIds = useRef(new Set())
   const {
-    addOrder: addKitchenOrder,
     error: kitchenError,
     isLoading: isKitchenLoading,
     orders: kitchenOrders,
     pendingOrderIds,
     refreshOrders,
     updateOrderStatus: updateKitchenOrderStatus,
-  } = useKitchenOrders()
+  } = useKitchenOrders(canUseKitchen)
   const {
     error: trackingError,
     isLoading: isTrackingLoading,
@@ -378,7 +423,9 @@ function App() {
     setOrder: setTrackedOrder,
   } = useTrackedOrder(
     trackedOrderId,
-    activeView === 'student' && studentView === 'tracking',
+    user.role === 'STUDENT' &&
+      activeView === 'student' &&
+      studentView === 'tracking',
   )
 
   useEffect(() => {
@@ -386,16 +433,32 @@ function App() {
   }, [activeView, studentView])
 
   useEffect(() => {
-    localStorage.setItem(KITCHEN_BATCHES_KEY, JSON.stringify(kitchenBatches))
-  }, [kitchenBatches])
+    if (canUseKitchen) {
+      localStorage.setItem(KITCHEN_BATCHES_KEY, JSON.stringify(kitchenBatches))
+    }
+  }, [canUseKitchen, kitchenBatches])
+
+  useEffect(() => {
+    if (user.role === 'STUDENT') {
+      localStorage.setItem(
+        getStudentStorageKey(STUDENT_CART_KEY_PREFIX, user.publicId),
+        JSON.stringify(cart),
+      )
+    }
+  }, [cart, user.publicId, user.role])
 
   useEffect(() => {
     if (trackedOrderId) {
-      localStorage.setItem(TRACKED_ORDER_ID_KEY, String(trackedOrderId))
+      localStorage.setItem(
+        getStudentStorageKey(TRACKED_ORDER_ID_KEY_PREFIX, user.publicId),
+        String(trackedOrderId),
+      )
     }
-  }, [trackedOrderId])
+  }, [trackedOrderId, user.publicId])
 
   useEffect(() => {
+    if (!canUseKitchen) return
+
     if (
       checkoutSignatureRef.current !== checkoutSignature &&
       !isSubmittingOrder
@@ -404,7 +467,7 @@ function App() {
       checkoutRequestId.current = null
       setOrderSubmitError('')
     }
-  }, [checkoutSignature, isSubmittingOrder])
+  }, [canUseKitchen, checkoutSignature, isSubmittingOrder])
 
   useEffect(() => {
     const activeBatchRecords = kitchenBatches.filter(
@@ -451,7 +514,7 @@ function App() {
           })
           .finally(() => joiningOrderIds.current.delete(order.id))
       })
-  }, [kitchenBatches, kitchenOrders, updateKitchenOrderStatus])
+  }, [canUseKitchen, kitchenBatches, kitchenOrders, updateKitchenOrderStatus])
 
   const visibleItems = activeCategory === 'All' ? menuItems : menuItems.filter((item) => item.category === activeCategory)
   const cartItems = menuItems.filter((item) => cart[item.id])
@@ -511,7 +574,6 @@ function App() {
       setConfirmedOrder(savedOrder)
       setTrackedOrderId(savedOrder.id)
       setTrackedOrder(savedOrder)
-      addKitchenOrder(savedOrder)
       setCart({})
       setCheckoutStep('confirmation')
       checkoutRequestId.current = null
@@ -622,23 +684,31 @@ function App() {
           <span><strong>CampusBite</strong><small>Working name</small></span>
         </a>
         <div className="header-actions">
-          <div className="view-switch" aria-label="Choose app view">
-            <button
-              className={activeView === 'student' ? 'active' : ''}
-              onClick={() => setActiveView('student')}
-            >
-              Student
-            </button>
-            <button
-              className={activeView === 'kitchen' ? 'active' : ''}
-              onClick={() => {
-                setActiveView('kitchen')
-                setIsCartOpen(false)
-              }}
-            >
-              Kitchen
-            </button>
-          </div>
+          {user.role === 'OWNER' ? (
+            <div className="view-switch" aria-label="Choose owner workspace">
+              <button
+                className={activeView === 'owner' ? 'active' : ''}
+                onClick={() => setActiveView('owner')}
+                type="button"
+              >
+                Owner
+              </button>
+              <button
+                className={activeView === 'kitchen' ? 'active' : ''}
+                onClick={() => {
+                  setActiveView('kitchen')
+                  setIsCartOpen(false)
+                }}
+                type="button"
+              >
+                Kitchen
+              </button>
+            </div>
+          ) : (
+            <span className="workspace-role-badge">
+              {user.role === 'KITCHEN' ? 'Kitchen workspace' : 'Student workspace'}
+            </span>
+          )}
 
           {activeView === 'student' && trackedOrderId && (
             <button
@@ -665,10 +735,22 @@ function App() {
               <span className="cart-count">{cartCount}</span>
             </button>
           )}
+
+          <SessionControls
+            error={authError}
+            isLoggingOut={isLoggingOut}
+            onLogout={logout}
+            user={user}
+          />
         </div>
       </header>
 
-      {activeView === 'kitchen' ? 
+      {activeView === 'owner' ? (
+        <OwnerWorkspace
+          onOpenKitchen={() => setActiveView('kitchen')}
+          user={user}
+        />
+      ) : activeView === 'kitchen' ?
       <KitchenDashboard
   batchRecords={kitchenBatches}
   error={kitchenError}
@@ -881,4 +963,14 @@ function App() {
     </div>
   )
 }
+
+function App() {
+  const { isCheckingSession, user } = useAuth()
+
+  if (isCheckingSession) return <AuthLoadingScreen />
+  if (!user) return <LoginScreen />
+
+  return <CampusBiteWorkspace key={user.publicId} user={user} />
+}
+
 export default App

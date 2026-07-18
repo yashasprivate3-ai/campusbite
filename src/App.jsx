@@ -13,6 +13,7 @@ import { OrderTracking } from './components/OrderTracking'
 import { OrderTrackingState } from './components/OrderTrackingState'
 import { OwnerWorkspace } from './components/OwnerWorkspace'
 import { PhoneOnboardingScreen } from './components/PhoneOnboardingScreen'
+import { PhoneVerificationDialog } from './components/PhoneVerificationDialog'
 import { SessionControls } from './components/SessionControls'
 import { useKitchenOrders } from './hooks/useKitchenOrders'
 import { useTrackedOrder } from './hooks/useTrackedOrder'
@@ -385,6 +386,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   const [confirmedOrder, setConfirmedOrder] = useState(null)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [orderSubmitError, setOrderSubmitError] = useState('')
+  const [isPhoneVerificationOpen, setIsPhoneVerificationOpen] = useState(false)
   const [activeView, setActiveView] = useState(() =>
     getDefaultView(user.role),
   )
@@ -549,6 +551,12 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   async function confirmOrder() {
     if (isSubmittingOrder || cartItems.length === 0) return
 
+    if (user.role === 'STUDENT' && !user.phoneVerified) {
+      setCheckoutStep(null)
+      setIsPhoneVerificationOpen(true)
+      return
+    }
+
     const requestId = checkoutRequestId.current || crypto.randomUUID()
     checkoutRequestId.current = requestId
     setIsSubmittingOrder(true)
@@ -580,6 +588,10 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
       checkoutRequestId.current = null
     } catch (error) {
       setOrderSubmitError(error.message)
+      if (error.code === 'phone_verification_required') {
+        setCheckoutStep(null)
+        setIsPhoneVerificationOpen(true)
+      }
     } finally {
       setIsSubmittingOrder(false)
     }
@@ -741,11 +753,18 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
             error={authError}
             isLoggingOut={isLoggingOut}
             onEditPhone={
-              user.googleLinked && user.phoneNumber && !user.phoneVerified
+              user.googleLinked && user.phoneNumber
                 ? onEditPhone
                 : undefined
             }
             onLogout={logout}
+            onVerifyPhone={
+              user.role === 'STUDENT' &&
+              user.phoneNumber &&
+              !user.phoneVerified
+                ? () => setIsPhoneVerificationOpen(true)
+                : undefined
+            }
             user={user}
           />
         </div>
@@ -796,6 +815,21 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
             <span><strong>We will be live shortly....❤️</strong><small>Average pickup : 8–10 minutes</small></span>
           </div>
         </section>
+
+        {!user.phoneVerified && (
+          <section className="phone-verification-banner" aria-label="Phone verification required">
+            <div>
+              <span aria-hidden="true">○</span>
+              <p>
+                <strong>Verify your phone to place a new order.</strong>
+                <small>You can still browse the menu and track existing orders.</small>
+              </p>
+            </div>
+            <button onClick={() => setIsPhoneVerificationOpen(true)} type="button">
+              Verify phone
+            </button>
+          </section>
+        )}
 
         <section className="menu-section" aria-labelledby="menu-title">
           <div className="section-heading">
@@ -862,7 +896,9 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                   <div><span>Item total</span><strong>₹{cartTotal}</strong></div>
                   <button className="clear-cart-button" type="button" onClick={clearCart}>Clear cart</button>
                   <p>Payment integration comes next. This checkout currently confirms a test order.</p>
-                  <button className="checkout-button" type="button" onClick={openCheckout}>Continue to checkout · ₹{cartTotal}</button>
+                  <button className="checkout-button" type="button" onClick={openCheckout}>
+                    Continue to checkout · ₹{cartTotal}
+                  </button>
                 </div>
               </>
             )}
@@ -920,6 +956,12 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                 </div>
                 <div className="pickup-summary"><span>Pickup</span><strong>{pickupMethod === 'scheduled' ? pickupSlot : 'As soon as ready'}</strong>{instructions.trim() && <small>Note: {instructions.trim()}</small>}</div>
                 <div className="demo-notice">No payment will be charged. Payment verification will be connected in a later sprint.</div>
+                {!user.phoneVerified && (
+                  <div className="phone-verification-review-notice" role="status">
+                    Verify your saved phone number before submitting this order.
+                    Your cart and pickup choices will remain available.
+                  </div>
+                )}
                 {orderSubmitError && (
                   <div className="checkout-api-error" role="alert">
                     <strong>Order not saved</strong>
@@ -934,7 +976,9 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                 >
                   {isSubmittingOrder
                     ? 'Saving your order…'
-                    : `Confirm test order · ₹${cartTotal}`}
+                    : user.phoneVerified
+                      ? `Confirm test order · ₹${cartTotal}`
+                      : 'Verify phone to place order'}
                 </button>
               </div>
             )}
@@ -952,6 +996,16 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
             )}
           </section>
         </div>
+      )}
+      {isPhoneVerificationOpen && (
+        <PhoneVerificationDialog
+          onClose={() => setIsPhoneVerificationOpen(false)}
+          onEditPhone={() => {
+            setIsPhoneVerificationOpen(false)
+            onEditPhone()
+          }}
+          user={user}
+        />
       )}
       <footer className="app-footer">
   <p className="footer-tagline">Made with passion.</p>

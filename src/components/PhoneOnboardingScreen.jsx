@@ -112,8 +112,8 @@ export function PhoneOnboardingScreen({ isCorrection, onCancel, onCompleted }) {
           <div className="phone-unverified-note">
             <strong>Not verified yet</strong>
             <span>
-              CampusBite stores this number for onboarding only. Phone ownership
-              verification belongs to Sprint 7.2; no OTP is sent now.
+              After saving, request a one-time code from the Student workspace
+              to verify phone ownership before placing a new order.
             </span>
           </div>
 

@@ -24,6 +24,10 @@ import {
 } from '../services/http.js'
 import { addFailedLoginDelay } from '../services/loginThrottle.js'
 import { updateStudentPhone } from '../services/phoneProfile.js'
+import {
+  requestPhoneVerification,
+  verifyPhoneCode,
+} from '../services/phoneVerification.js'
 
 export async function handleAuthRoutes(
   request,
@@ -32,6 +36,7 @@ export async function handleAuthRoutes(
   database,
   authConfig,
   loginThrottle,
+  phoneVerificationProvider,
 ) {
   if (requestUrl.pathname === '/api/auth/login') {
     if (request.method !== 'POST') {
@@ -158,6 +163,51 @@ export async function handleAuthRoutes(
       onboardingRequired: user.onboardingRequired,
       user,
     })
+    return true
+  }
+
+  if (requestUrl.pathname === '/api/auth/phone-verification/request') {
+    if (request.method !== 'POST') {
+      sendMethodNotAllowed(response, ['POST'])
+      return true
+    }
+
+    const authContext = requireRole(
+      database,
+      optionalAuth(database, request, authConfig),
+      ROLES.STUDENT,
+      request,
+    )
+    const challenge = await requestPhoneVerification(
+      database,
+      authContext.internalUserId,
+      request,
+      authConfig.otp,
+      phoneVerificationProvider,
+    )
+    sendJson(response, 201, challenge)
+    return true
+  }
+
+  if (requestUrl.pathname === '/api/auth/phone-verification/verify') {
+    if (request.method !== 'POST') {
+      sendMethodNotAllowed(response, ['POST'])
+      return true
+    }
+
+    const authContext = requireRole(
+      database,
+      optionalAuth(database, request, authConfig),
+      ROLES.STUDENT,
+      request,
+    )
+    const result = verifyPhoneCode(
+      database,
+      authContext.internalUserId,
+      await readJsonBody(request),
+      authConfig.otp,
+    )
+    sendJson(response, 200, result)
     return true
   }
 

@@ -34,6 +34,19 @@ export async function saveStudentPhone(phoneNumber) {
   return response.user
 }
 
+export async function requestPhoneVerification() {
+  return apiRequest('/api/auth/phone-verification/request', {
+    method: 'POST',
+  })
+}
+
+export async function verifyPhoneVerification(code) {
+  return apiRequest('/api/auth/phone-verification/verify', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  })
+}
+
 export async function logoutSession() {
   return apiRequest('/api/auth/logout', {
     method: 'POST',

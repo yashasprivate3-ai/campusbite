@@ -49,6 +49,7 @@ export function mapSafeUser(row) {
     email: row.email,
     phoneNumber: row.phone_number,
     phoneVerified: Boolean(row.phone_verified),
+    phoneVerifiedAt: normalizeTimestamp(row.phone_verified_at),
     profilePictureUrl: row.profile_picture_url || null,
     emailVerified: Boolean(row.email_verified),
     googleLinked,
@@ -98,7 +99,7 @@ function findLocalIdentity(database, identifier) {
     .prepare(
       `SELECT ai.id AS identity_id, ai.password_hash,
               u.id AS user_id, u.public_id, u.role, u.display_name,
-              u.email, u.phone_number, u.phone_verified,
+              u.email, u.phone_number, u.phone_verified, u.phone_verified_at,
               u.profile_picture_url, u.email_verified, u.last_login_at,
               u.onboarding_completed_at, u.status,
               EXISTS (
@@ -293,7 +294,8 @@ function findSession(database, tokenHash) {
     .prepare(
       `SELECT s.id AS session_id, s.user_id, s.expires_at, s.last_used_at,
               s.revoked_at, u.public_id, u.role, u.display_name, u.email,
-              u.phone_number, u.phone_verified, u.profile_picture_url,
+              u.phone_number, u.phone_verified, u.phone_verified_at,
+              u.profile_picture_url,
               u.email_verified, u.last_login_at, u.onboarding_completed_at,
               u.status,
               EXISTS (
@@ -314,7 +316,8 @@ export function getSafeUserById(database, userId) {
   const row = database
     .prepare(
       `SELECT u.id AS user_id, u.public_id, u.role, u.display_name, u.email,
-              u.phone_number, u.phone_verified, u.profile_picture_url,
+              u.phone_number, u.phone_verified, u.phone_verified_at,
+              u.profile_picture_url,
               u.email_verified, u.last_login_at, u.onboarding_completed_at,
               u.status, u.created_at AS user_created_at,
               u.updated_at AS user_updated_at,

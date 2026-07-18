@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -216,6 +216,41 @@ function migrateToVersion4(database) {
   `)
 }
 
+function migrateToVersion5(database) {
+  addColumnIfMissing(database, 'users', 'phone_verified_at', 'TEXT')
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS phone_verification_challenges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      public_id TEXT NOT NULL UNIQUE,
+      user_id INTEGER NOT NULL,
+      phone_number TEXT NOT NULL,
+      otp_hash TEXT NOT NULL,
+      provider TEXT NOT NULL CHECK (provider IN ('development', 'meta-whatsapp')),
+      expires_at TEXT NOT NULL,
+      resend_available_at TEXT NOT NULL,
+      failed_attempts INTEGER NOT NULL DEFAULT 0
+        CHECK (failed_attempts BETWEEN 0 AND 5),
+      consumed_at TEXT,
+      invalidated_at TEXT,
+      request_ip_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_phone_verification_user_created
+      ON phone_verification_challenges(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_phone_verification_phone_created
+      ON phone_verification_challenges(phone_number, created_at);
+    CREATE INDEX IF NOT EXISTS idx_phone_verification_ip_created
+      ON phone_verification_challenges(request_ip_hash, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_phone_verification_active_user_phone
+      ON phone_verification_challenges(user_id, phone_number)
+      WHERE consumed_at IS NULL AND invalidated_at IS NULL;
+  `)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -248,6 +283,10 @@ export function initializeDatabase(databasePath) {
 
     if (currentVersion < 4) {
       migrateToVersion4(database)
+    }
+
+    if (currentVersion < 5) {
+      migrateToVersion5(database)
     }
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)

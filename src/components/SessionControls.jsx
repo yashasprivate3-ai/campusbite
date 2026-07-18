@@ -3,6 +3,7 @@ export function SessionControls({
   isLoggingOut,
   onEditPhone,
   onLogout,
+  onVerifyPhone,
   user,
 }) {
   async function handleLogout() {
@@ -27,6 +28,23 @@ export function SessionControls({
         <span>{user.displayName}</span>
         <small>{user.role}</small>
       </div>
+      {user.role === 'STUDENT' && user.phoneNumber && (
+        <span
+          className={
+            user.phoneVerified
+              ? 'session-phone-status verified'
+              : 'session-phone-status'
+          }
+          title={user.phoneVerified ? 'Phone verified' : 'Phone not verified'}
+        >
+          {user.phoneVerified ? 'Verified' : 'Unverified'}
+        </span>
+      )}
+      {onVerifyPhone && (
+        <button type="button" onClick={onVerifyPhone}>
+          Verify phone
+        </button>
+      )}
       {onEditPhone && (
         <button type="button" onClick={onEditPhone}>
           Edit phone

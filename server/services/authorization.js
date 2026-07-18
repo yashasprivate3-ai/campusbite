@@ -89,3 +89,20 @@ export function requireStudentOnboardingComplete(authContext) {
 
   return authenticated
 }
+
+export function requireStudentPhoneVerified(authContext) {
+  const authenticated = requireStudentOnboardingComplete(authContext)
+
+  if (
+    authenticated.user.role === ROLES.STUDENT &&
+    !authenticated.user.phoneVerified
+  ) {
+    throw new ApiError(
+      403,
+      'phone_verification_required',
+      'Verify your phone number before placing a new order.',
+    )
+  }
+
+  return authenticated
+}

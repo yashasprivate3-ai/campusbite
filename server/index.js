@@ -11,6 +11,7 @@ import {
   sendNotFound,
 } from './services/http.js'
 import { LoginThrottle } from './services/loginThrottle.js'
+import { createPhoneVerificationProvider } from './services/phoneVerificationProvider.js'
 
 let database
 
@@ -40,6 +41,10 @@ const loginThrottle = new LoginThrottle({
   maxAttempts: serverConfig.auth.loginMaxAttempts,
   windowMinutes: serverConfig.auth.loginWindowMinutes,
 })
+const phoneVerificationProvider = createPhoneVerificationProvider(
+  serverConfig.auth.otp,
+  serverConfig.isProduction,
+)
 
 const server = createServer(async (request, response) => {
   try {
@@ -61,6 +66,7 @@ const server = createServer(async (request, response) => {
         database,
         serverConfig.auth,
         loginThrottle,
+        phoneVerificationProvider,
       )
     ) {
       return

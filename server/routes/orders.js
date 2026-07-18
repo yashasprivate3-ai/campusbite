@@ -17,6 +17,7 @@ import {
   requireAuth,
   requireRole,
   requireStudentOnboardingComplete,
+  requireStudentPhoneVerified,
   ROLES,
 } from '../services/authorization.js'
 
@@ -66,7 +67,7 @@ export async function handleOrderRoutes(
         ROLES.STUDENT,
         request,
       )
-      requireStudentOnboardingComplete(authContext)
+      requireStudentPhoneVerified(authContext)
       const result = createOrder(
         database,
         await readJsonBody(request),

@@ -25,6 +25,10 @@ export function normalizeIndianMobileNumber(value) {
   return `+91${nationalNumber}`
 }
 
+function maskPhoneNumber(phoneNumber) {
+  return `${phoneNumber.slice(0, 3)}******${phoneNumber.slice(-4)}`
+}
+
 export function updateStudentPhone(database, userId, payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw invalidRequest('Request body must be an object.')
@@ -53,19 +57,52 @@ export function updateStudentPhone(database, userId, payload) {
         `UPDATE users
             SET phone_number = ?,
                 phone_verified = CASE WHEN ? THEN 0 ELSE phone_verified END,
+                phone_verified_at = CASE WHEN ? THEN NULL ELSE phone_verified_at END,
                 onboarding_completed_at = COALESCE(onboarding_completed_at, ?),
                 updated_at = ?
           WHERE id = ?`,
       )
-      .run(phoneNumber, changed ? 1 : 0, updatedAt, updatedAt, userId)
+      .run(
+        phoneNumber,
+        changed ? 1 : 0,
+        changed ? 1 : 0,
+        updatedAt,
+        updatedAt,
+        userId,
+      )
+
+    if (changed) {
+      database
+        .prepare(
+          `UPDATE phone_verification_challenges
+              SET invalidated_at = ?, updated_at = ?
+            WHERE user_id = ? AND consumed_at IS NULL AND invalidated_at IS NULL`,
+        )
+        .run(updatedAt, updatedAt, userId)
+    }
 
     if (changed) {
       recordAuthEvent(database, {
         eventType: firstPhone ? 'PHONE_ADDED' : 'PHONE_CHANGED',
         success: true,
         userId,
-        metadata: { phoneVerified: false },
+        metadata: {
+          maskedPhone: maskPhoneNumber(phoneNumber),
+          phoneVerified: false,
+        },
       })
+
+      if (!firstPhone) {
+        recordAuthEvent(database, {
+          eventType: 'PHONE_CHANGED_VERIFICATION_RESET',
+          success: true,
+          userId,
+          metadata: {
+            maskedPhone: maskPhoneNumber(phoneNumber),
+            phoneVerified: false,
+          },
+        })
+      }
     }
     if (completedNow) {
       recordAuthEvent(database, {

@@ -48,6 +48,39 @@ function readCookieName(value) {
   return cookieName
 }
 
+function readOtpProvider(value) {
+  const provider = String(value || 'development').trim().toLowerCase()
+
+  if (!['development', 'meta-whatsapp'].includes(provider)) {
+    throw new Error(
+      'CAMPUSBITE_OTP_PROVIDER must be development or meta-whatsapp.',
+    )
+  }
+
+  return provider
+}
+
+function readOtpSecret(value) {
+  const secret = String(value || '')
+
+  if (secret.length < 32) {
+    throw new Error('CAMPUSBITE_OTP_HASH_SECRET must contain at least 32 characters.')
+  }
+
+  return secret
+}
+
+function readDevelopmentOtpCode(value, provider) {
+  if (provider !== 'development') return null
+
+  const code = String(value || '')
+  if (!/^\d{6}$/.test(code)) {
+    throw new Error('CAMPUSBITE_DEV_OTP_CODE must be exactly six digits.')
+  }
+
+  return code
+}
+
 const nodeEnvironment = process.env.NODE_ENV || 'development'
 const isProduction = nodeEnvironment === 'production'
 const developmentAccountsEnabled =
@@ -59,6 +92,11 @@ const googleClientId = String(process.env.GOOGLE_CLIENT_ID || '').trim()
 const googleFrontendClientId = String(
   process.env.VITE_GOOGLE_CLIENT_ID || '',
 ).trim()
+const otpProvider = readOtpProvider(process.env.CAMPUSBITE_OTP_PROVIDER)
+
+if (isProduction && otpProvider === 'development') {
+  throw new Error('The development OTP provider cannot run in production.')
+}
 
 export const serverConfig = Object.freeze({
   host: process.env.CAMPUSBITE_API_HOST || '127.0.0.1',
@@ -107,6 +145,30 @@ export const serverConfig = Object.freeze({
         googleClientId === googleFrontendClientId,
       enabled: googleLoginEnabled,
       frontendClientId: googleFrontendClientId,
+    }),
+    otp: Object.freeze({
+      provider: otpProvider,
+      developmentCode: readDevelopmentOtpCode(
+        process.env.CAMPUSBITE_DEV_OTP_CODE,
+        otpProvider,
+      ),
+      hashSecret: readOtpSecret(process.env.CAMPUSBITE_OTP_HASH_SECRET),
+      expiresMinutes: 5,
+      resendCooldownSeconds: 60,
+      maxAttempts: 5,
+      userPhoneRequestsPerHour: 5,
+      ipRequestsPerHour: 20,
+      metaWhatsApp: Object.freeze({
+        accessToken: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_ACCESS_TOKEN || '',
+        ),
+        phoneNumberId: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_PHONE_NUMBER_ID || '',
+        ),
+        templateName: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_TEMPLATE_NAME || '',
+        ),
+      }),
     }),
     resetDevelopmentPasswords:
       developmentAccountsEnabled &&

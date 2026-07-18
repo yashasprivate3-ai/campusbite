@@ -12,6 +12,7 @@ import { LoginScreen } from './components/LoginScreen'
 import { OrderTracking } from './components/OrderTracking'
 import { OrderTrackingState } from './components/OrderTrackingState'
 import { OwnerWorkspace } from './components/OwnerWorkspace'
+import { PhoneOnboardingScreen } from './components/PhoneOnboardingScreen'
 import { SessionControls } from './components/SessionControls'
 import { useKitchenOrders } from './hooks/useKitchenOrders'
 import { useTrackedOrder } from './hooks/useTrackedOrder'
@@ -369,7 +370,7 @@ function getDefaultView(role) {
   return 'student'
 }
 
-function CampusBiteWorkspace({ user }) {
+function CampusBiteWorkspace({ onEditPhone, user }) {
   const { error: authError, isLoggingOut, logout } = useAuth()
   const canUseKitchen = user.role === 'OWNER' || user.role === 'KITCHEN'
   const [activeCategory, setActiveCategory] = useState('All')
@@ -739,6 +740,11 @@ function CampusBiteWorkspace({ user }) {
           <SessionControls
             error={authError}
             isLoggingOut={isLoggingOut}
+            onEditPhone={
+              user.googleLinked && user.phoneNumber && !user.phoneVerified
+                ? onEditPhone
+                : undefined
+            }
             onLogout={logout}
             user={user}
           />
@@ -964,13 +970,35 @@ function CampusBiteWorkspace({ user }) {
   )
 }
 
+function AuthenticatedApp({ user }) {
+  const [isEditingPhone, setIsEditingPhone] = useState(false)
+
+  if (user.onboardingRequired || isEditingPhone) {
+    return (
+      <PhoneOnboardingScreen
+        isCorrection={isEditingPhone}
+        onCancel={() => setIsEditingPhone(false)}
+        onCompleted={() => setIsEditingPhone(false)}
+      />
+    )
+  }
+
+  return (
+    <CampusBiteWorkspace
+      key={user.publicId}
+      onEditPhone={() => setIsEditingPhone(true)}
+      user={user}
+    />
+  )
+}
+
 function App() {
   const { isCheckingSession, user } = useAuth()
 
   if (isCheckingSession) return <AuthLoadingScreen />
   if (!user) return <LoginScreen />
 
-  return <CampusBiteWorkspace key={user.publicId} user={user} />
+  return <AuthenticatedApp key={user.publicId} user={user} />
 }
 
 export default App

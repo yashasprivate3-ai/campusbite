@@ -16,6 +16,7 @@ import {
   requireAnyRole,
   requireAuth,
   requireRole,
+  requireStudentOnboardingComplete,
   ROLES,
 } from '../services/authorization.js'
 
@@ -65,6 +66,7 @@ export async function handleOrderRoutes(
         ROLES.STUDENT,
         request,
       )
+      requireStudentOnboardingComplete(authContext)
       const result = createOrder(
         database,
         await readJsonBody(request),
@@ -132,6 +134,7 @@ export async function handleOrderRoutes(
     const orderId = parseOrderId(orderMatch[1])
 
     if (authContext.user.role === ROLES.STUDENT) {
+      requireStudentOnboardingComplete(authContext)
       sendJson(response, 200, {
         order: getOrder(database, orderId, authContext.internalUserId),
       })

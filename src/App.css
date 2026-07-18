@@ -174,6 +174,293 @@
   opacity: 0.65;
 }
 
+.student-google-access {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid #d9e4de;
+  border-radius: 16px;
+  background: #f7faf8;
+}
+
+.student-google-access > strong {
+  color: #173f35;
+}
+
+.student-google-access > span {
+  color: #65716b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.google-signin-control,
+.google-button {
+  display: grid;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  justify-items: center;
+}
+
+.google-button.processing {
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.google-control-status,
+.google-processing-state {
+  color: #52625a;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.google-setup-state {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px dashed #d0a88f;
+  border-radius: 13px;
+  color: #74442e;
+  background: #fff7f1;
+}
+
+.google-setup-state span {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #7b817d;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.login-divider::before,
+.login-divider::after {
+  height: 1px;
+  flex: 1;
+  background: #e0e5e1;
+  content: '';
+}
+
+.development-login-note {
+  padding: 10px 12px;
+  border-radius: 11px;
+  color: #6d5924;
+  background: #fff8df;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.session-profile-picture {
+  width: 38px;
+  height: 38px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px #d7ded9;
+}
+
+.phone-onboarding-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 28px;
+  background:
+    radial-gradient(circle at top left, #e6f0ea 0, transparent 38%),
+    #f6f4ee;
+}
+
+.phone-onboarding-card {
+  display: grid;
+  width: min(100%, 620px);
+  box-sizing: border-box;
+  gap: 24px;
+  padding: clamp(28px, 6vw, 54px);
+  border: 1px solid #dfe2dc;
+  border-radius: 30px;
+  background: #fff;
+  box-shadow: 0 24px 70px #22382f16;
+}
+
+.onboarding-profile {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  background: #edf3ef;
+}
+
+.onboarding-profile > img,
+.onboarding-profile > span:first-child {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #245f4d;
+  object-fit: cover;
+  font-weight: 900;
+}
+
+.onboarding-profile div,
+.onboarding-profile strong,
+.onboarding-profile span {
+  display: block;
+  min-width: 0;
+}
+
+.onboarding-profile small {
+  color: #2f7862;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.onboarding-profile strong {
+  margin-top: 4px;
+  color: #173f35;
+}
+
+.onboarding-profile div > span {
+  overflow: hidden;
+  margin-top: 3px;
+  color: #65716b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.onboarding-copy h1 {
+  margin: 8px 0 12px;
+  color: #173f35;
+  font-size: clamp(34px, 6vw, 52px);
+  line-height: 1.02;
+}
+
+.onboarding-copy > p:last-child {
+  margin: 0;
+  color: #65716b;
+  line-height: 1.6;
+}
+
+.phone-onboarding-form {
+  display: grid;
+  gap: 10px;
+}
+
+.phone-onboarding-form > label {
+  color: #34483f;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.phone-onboarding-form > small {
+  color: #7b817d;
+  font-size: 11px;
+  text-align: right;
+}
+
+.phone-validation-error {
+  color: #a34430;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.phone-input-shell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  border: 1px solid #cbd4cf;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.phone-input-shell:focus-within {
+  border-color: #2f7862;
+  outline: 3px solid #2f78621f;
+}
+
+.phone-input-shell span {
+  padding: 15px;
+  border-right: 1px solid #dfe4e1;
+  color: #173f35;
+  background: #f2f5f3;
+  font-weight: 900;
+}
+
+.phone-input-shell input {
+  min-width: 0;
+  min-height: 52px;
+  padding: 10px 14px;
+  border: 0;
+  outline: 0;
+  color: #173f35;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.phone-unverified-note {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0;
+  padding: 15px;
+  border-radius: 14px;
+  color: #6d5924;
+  background: #fff8df;
+}
+
+.phone-unverified-note span {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.onboarding-secondary-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.onboarding-secondary-actions button {
+  min-height: 42px;
+  padding: 9px 14px;
+  border: 1px solid #cbd4cf;
+  border-radius: 11px;
+  color: #173f35;
+  background: #fff;
+  font-weight: 900;
+}
+
+@media (max-width: 620px) {
+  .phone-onboarding-shell {
+    align-items: start;
+    padding: 12px;
+  }
+
+  .phone-onboarding-card {
+    gap: 20px;
+    padding: 24px 20px;
+    border-radius: 22px;
+  }
+
+  .onboarding-secondary-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .auth-feedback {
   padding: 13px 15px;
   border-radius: 12px;

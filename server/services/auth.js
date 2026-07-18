@@ -39,7 +39,9 @@ function normalizeLoginPassword(value) {
   return value
 }
 
-function mapSafeUser(row) {
+export function mapSafeUser(row) {
+  const googleLinked = Boolean(row.has_google_identity)
+
   return {
     publicId: row.public_id,
     role: row.role,
@@ -47,7 +49,14 @@ function mapSafeUser(row) {
     email: row.email,
     phoneNumber: row.phone_number,
     phoneVerified: Boolean(row.phone_verified),
+    profilePictureUrl: row.profile_picture_url || null,
+    emailVerified: Boolean(row.email_verified),
+    googleLinked,
+    onboardingRequired:
+      row.role === 'STUDENT' && googleLinked && !row.phone_number,
     status: row.status,
+    lastLoginAt: normalizeTimestamp(row.last_login_at),
+    onboardingCompletedAt: normalizeTimestamp(row.onboarding_completed_at),
     createdAt: normalizeTimestamp(row.user_created_at),
     updatedAt: normalizeTimestamp(row.user_updated_at),
   }
@@ -89,7 +98,14 @@ function findLocalIdentity(database, identifier) {
     .prepare(
       `SELECT ai.id AS identity_id, ai.password_hash,
               u.id AS user_id, u.public_id, u.role, u.display_name,
-              u.email, u.phone_number, u.phone_verified, u.status,
+              u.email, u.phone_number, u.phone_verified,
+              u.profile_picture_url, u.email_verified, u.last_login_at,
+              u.onboarding_completed_at, u.status,
+              EXISTS (
+                SELECT 1 FROM auth_identities google_identity
+                 WHERE google_identity.user_id = u.id
+                   AND google_identity.provider = 'GOOGLE'
+              ) AS has_google_identity,
               u.created_at AS user_created_at,
               u.updated_at AS user_updated_at
          FROM auth_identities ai
@@ -146,6 +162,14 @@ export function authenticateLocalUser(database, payload, authConfig) {
     )
   }
 
+  const loginTime = new Date().toISOString()
+  database
+    .prepare('UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?')
+    .run(loginTime, loginTime, identity.user_id)
+  database
+    .prepare('UPDATE auth_identities SET last_used_at = ?, updated_at = ? WHERE id = ?')
+    .run(loginTime, loginTime, identity.identity_id)
+
   return {
     internalUserId: identity.user_id,
     user: mapSafeUser(identity),
@@ -182,7 +206,13 @@ function getRequestMetadata(request) {
   return { createdIp: createdIp || null, userAgent: userAgent || null }
 }
 
-export function createSession(database, internalUserId, request, authConfig) {
+export function createSession(
+  database,
+  internalUserId,
+  request,
+  authConfig,
+  { provider = 'LOCAL', successEvent = 'LOGIN_SUCCEEDED' } = {},
+) {
   const rawToken = randomBytes(32).toString('base64url')
   const tokenHash = hashValue(rawToken)
   const createdAt = new Date()
@@ -212,10 +242,10 @@ export function createSession(database, internalUserId, request, authConfig) {
       )
 
     recordAuthEvent(database, {
-      eventType: 'LOGIN_SUCCEEDED',
+      eventType: successEvent,
       success: true,
       userId: internalUserId,
-      metadata: { provider: 'LOCAL' },
+      metadata: { provider },
     })
     database.exec('COMMIT;')
   } catch (error) {
@@ -263,7 +293,14 @@ function findSession(database, tokenHash) {
     .prepare(
       `SELECT s.id AS session_id, s.user_id, s.expires_at, s.last_used_at,
               s.revoked_at, u.public_id, u.role, u.display_name, u.email,
-              u.phone_number, u.phone_verified, u.status,
+              u.phone_number, u.phone_verified, u.profile_picture_url,
+              u.email_verified, u.last_login_at, u.onboarding_completed_at,
+              u.status,
+              EXISTS (
+                SELECT 1 FROM auth_identities google_identity
+                 WHERE google_identity.user_id = u.id
+                   AND google_identity.provider = 'GOOGLE'
+              ) AS has_google_identity,
               u.created_at AS user_created_at,
               u.updated_at AS user_updated_at
          FROM sessions s
@@ -271,6 +308,27 @@ function findSession(database, tokenHash) {
         WHERE s.token_hash = ?`,
     )
     .get(tokenHash)
+}
+
+export function getSafeUserById(database, userId) {
+  const row = database
+    .prepare(
+      `SELECT u.id AS user_id, u.public_id, u.role, u.display_name, u.email,
+              u.phone_number, u.phone_verified, u.profile_picture_url,
+              u.email_verified, u.last_login_at, u.onboarding_completed_at,
+              u.status, u.created_at AS user_created_at,
+              u.updated_at AS user_updated_at,
+              EXISTS (
+                SELECT 1 FROM auth_identities google_identity
+                 WHERE google_identity.user_id = u.id
+                   AND google_identity.provider = 'GOOGLE'
+              ) AS has_google_identity
+         FROM users u
+        WHERE u.id = ?`,
+    )
+    .get(userId)
+
+  return row ? mapSafeUser(row) : null
 }
 
 function revokeInvalidSession(database, session, eventType, metadata) {

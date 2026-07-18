@@ -17,6 +17,23 @@ export async function loginWithPassword(identifier, password) {
   return response.user
 }
 
+export async function loginWithGoogleCredential(credential) {
+  const response = await apiRequest('/api/auth/google', {
+    method: 'POST',
+    notifyUnauthorized: false,
+    body: JSON.stringify({ credential }),
+  })
+  return response.user
+}
+
+export async function saveStudentPhone(phoneNumber) {
+  const response = await apiRequest('/api/auth/profile/phone', {
+    method: 'PATCH',
+    body: JSON.stringify({ phoneNumber }),
+  })
+  return response.user
+}
+
 export async function logoutSession() {
   return apiRequest('/api/auth/logout', {
     method: 'POST',

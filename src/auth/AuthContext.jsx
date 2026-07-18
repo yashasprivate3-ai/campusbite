@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getCurrentUser,
+  loginWithGoogleCredential,
   loginWithPassword,
   logoutSession,
+  saveStudentPhone,
 } from '../services/authApi.js'
 import { AUTH_UNAUTHORIZED_EVENT } from '../services/apiClient.js'
 import { AuthContext } from './authContext.js'
@@ -12,6 +14,7 @@ export function AuthProvider({ children }) {
   const [isCheckingSession, setIsCheckingSession] = useState(true)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const [isCompletingOnboarding, setIsCompletingOnboarding] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const sessionRequest = useRef(null)
@@ -108,6 +111,39 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
+  const googleLogin = useCallback(async (credential) => {
+    setIsAuthenticating(true)
+    setError('')
+    setMessage('')
+
+    try {
+      const authenticatedUser = await loginWithGoogleCredential(credential)
+      setUser(authenticatedUser)
+      return authenticatedUser
+    } catch (requestError) {
+      setError(requestError.message)
+      throw requestError
+    } finally {
+      setIsAuthenticating(false)
+    }
+  }, [])
+
+  const completePhoneOnboarding = useCallback(async (phoneNumber) => {
+    setIsCompletingOnboarding(true)
+    setError('')
+
+    try {
+      const updatedUser = await saveStudentPhone(phoneNumber)
+      setUser(updatedUser)
+      return updatedUser
+    } catch (requestError) {
+      setError(requestError.message)
+      throw requestError
+    } finally {
+      setIsCompletingOnboarding(false)
+    }
+  }, [])
+
   const clearFeedback = useCallback(() => {
     setError('')
     setMessage('')
@@ -116,9 +152,12 @@ export function AuthProvider({ children }) {
   const value = useMemo(
     () => ({
       clearFeedback,
+      completePhoneOnboarding,
       error,
+      googleLogin,
       isAuthenticating,
       isCheckingSession,
+      isCompletingOnboarding,
       isLoggingOut,
       login,
       logout,
@@ -129,9 +168,12 @@ export function AuthProvider({ children }) {
     }),
     [
       clearFeedback,
+      completePhoneOnboarding,
       error,
+      googleLogin,
       isAuthenticating,
       isCheckingSession,
+      isCompletingOnboarding,
       isLoggingOut,
       login,
       logout,

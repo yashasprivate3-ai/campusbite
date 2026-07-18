@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -197,6 +197,25 @@ function migrateToVersion3(database) {
   `)
 }
 
+function migrateToVersion4(database) {
+  addColumnIfMissing(database, 'users', 'profile_picture_url', 'TEXT')
+  addColumnIfMissing(
+    database,
+    'users',
+    'email_verified',
+    'INTEGER NOT NULL DEFAULT 0 CHECK (email_verified IN (0, 1))',
+  )
+  addColumnIfMissing(database, 'users', 'last_login_at', 'TEXT')
+  addColumnIfMissing(database, 'users', 'onboarding_completed_at', 'TEXT')
+  addColumnIfMissing(database, 'auth_identities', 'last_used_at', 'TEXT')
+
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_verified_phone_unique
+      ON users(phone_number)
+      WHERE phone_number IS NOT NULL AND phone_verified = 1;
+  `)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -225,6 +244,10 @@ export function initializeDatabase(databasePath) {
 
     if (currentVersion < 3) {
       migrateToVersion3(database)
+    }
+
+    if (currentVersion < 4) {
+      migrateToVersion4(database)
     }
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)

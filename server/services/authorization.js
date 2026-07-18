@@ -72,3 +72,20 @@ export function requireAnyRole(
 export function requireRole(database, authContext, role, request) {
   return requireAnyRole(database, authContext, [role], request)
 }
+
+export function requireStudentOnboardingComplete(authContext) {
+  const authenticated = requireAuth(authContext)
+
+  if (
+    authenticated.user.role === ROLES.STUDENT &&
+    authenticated.user.onboardingRequired
+  ) {
+    throw new ApiError(
+      403,
+      'phone_onboarding_required',
+      'Add your phone number before creating an order.',
+    )
+  }
+
+  return authenticated
+}

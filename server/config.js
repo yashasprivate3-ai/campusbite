@@ -52,6 +52,13 @@ const nodeEnvironment = process.env.NODE_ENV || 'development'
 const isProduction = nodeEnvironment === 'production'
 const developmentAccountsEnabled =
   !isProduction && readBoolean(process.env.CAMPUSBITE_DEV_ACCOUNTS_ENABLED)
+const googleLoginEnabled = readBoolean(
+  process.env.CAMPUSBITE_GOOGLE_LOGIN_ENABLED,
+)
+const googleClientId = String(process.env.GOOGLE_CLIENT_ID || '').trim()
+const googleFrontendClientId = String(
+  process.env.VITE_GOOGLE_CLIENT_ID || '',
+).trim()
 
 export const serverConfig = Object.freeze({
   host: process.env.CAMPUSBITE_API_HOST || '127.0.0.1',
@@ -91,6 +98,16 @@ export const serverConfig = Object.freeze({
       { min: 1, max: 60 },
     ),
     developmentAccountsEnabled,
+    google: Object.freeze({
+      clientId: googleClientId,
+      configured:
+        googleLoginEnabled &&
+        Boolean(googleClientId) &&
+        Boolean(googleFrontendClientId) &&
+        googleClientId === googleFrontendClientId,
+      enabled: googleLoginEnabled,
+      frontendClientId: googleFrontendClientId,
+    }),
     resetDevelopmentPasswords:
       developmentAccountsEnabled &&
       readBoolean(process.env.CAMPUSBITE_DEV_RESET_PASSWORDS),

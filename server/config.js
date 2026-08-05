@@ -81,6 +81,42 @@ function readDevelopmentOtpCode(value, provider) {
   return code
 }
 
+function readPaymentProvider(value) {
+  const provider = String(value || 'disabled').trim().toLowerCase()
+
+  if (!['disabled', 'paytm'].includes(provider)) {
+    throw new Error('CAMPUSBITE_PAYMENT_PROVIDER must be disabled or paytm.')
+  }
+
+  return provider
+}
+
+function requirePaymentValue(value, label, provider) {
+  const normalized = String(value || '').trim()
+  if (provider === 'paytm' && !normalized) {
+    throw new Error(`${label} is required when Paytm payments are enabled.`)
+  }
+  return normalized
+}
+
+function readPublicAppUrl(value, provider) {
+  const normalized = String(value || '').trim()
+  if (provider !== 'paytm' && !normalized) return 'http://localhost:5173'
+
+  let parsed
+  try {
+    parsed = new URL(normalized)
+  } catch {
+    throw new Error('CAMPUSBITE_PUBLIC_APP_URL must be an absolute URL.')
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('CAMPUSBITE_PUBLIC_APP_URL must use HTTP or HTTPS.')
+  }
+
+  return parsed.origin
+}
+
 const nodeEnvironment = process.env.NODE_ENV || 'development'
 const isProduction = nodeEnvironment === 'production'
 const developmentAccountsEnabled =
@@ -93,10 +129,50 @@ const googleFrontendClientId = String(
   process.env.VITE_GOOGLE_CLIENT_ID || '',
 ).trim()
 const otpProvider = readOtpProvider(process.env.CAMPUSBITE_OTP_PROVIDER)
+const paymentProvider = readPaymentProvider(
+  process.env.CAMPUSBITE_PAYMENT_PROVIDER,
+)
+const paytmEnvironment = String(
+  process.env.PAYTM_ENVIRONMENT || 'staging',
+).trim().toLowerCase()
 
 if (isProduction && otpProvider === 'development') {
   throw new Error('The development OTP provider cannot run in production.')
 }
+
+if (paymentProvider === 'paytm' && paytmEnvironment !== 'staging') {
+  throw new Error('Sprint 8.1 supports PAYTM_ENVIRONMENT=staging only.')
+}
+
+if (isProduction && paymentProvider === 'paytm') {
+  throw new Error('Paytm staging credentials cannot run in production.')
+}
+
+const paytmMid = requirePaymentValue(
+  process.env.PAYTM_MID,
+  'PAYTM_MID',
+  paymentProvider,
+)
+const paytmMerchantKey = requirePaymentValue(
+  process.env.PAYTM_MERCHANT_KEY,
+  'PAYTM_MERCHANT_KEY',
+  paymentProvider,
+)
+const paytmWebsite = requirePaymentValue(
+  process.env.PAYTM_WEBSITE,
+  'PAYTM_WEBSITE',
+  paymentProvider,
+)
+const paytmIndustryType = requirePaymentValue(
+  process.env.PAYTM_INDUSTRY_TYPE,
+  'PAYTM_INDUSTRY_TYPE',
+  paymentProvider,
+)
+const paytmChannelId = requirePaymentValue(
+  process.env.PAYTM_CHANNEL_ID,
+  'PAYTM_CHANNEL_ID',
+  paymentProvider,
+)
 
 export const serverConfig = Object.freeze({
   host: process.env.CAMPUSBITE_API_HOST || '127.0.0.1',
@@ -107,6 +183,26 @@ export const serverConfig = Object.freeze({
   ),
   nodeEnvironment,
   isProduction,
+  payments: Object.freeze({
+    provider: paymentProvider,
+    enabled: paymentProvider === 'paytm',
+    publicAppUrl: readPublicAppUrl(
+      process.env.CAMPUSBITE_PUBLIC_APP_URL,
+      paymentProvider,
+    ),
+    paytm: Object.freeze({
+      environment: paytmEnvironment,
+      mid: paytmMid,
+      merchantKey: paytmMerchantKey,
+      website: paytmWebsite,
+      industryType: paytmIndustryType,
+      channelId: paytmChannelId,
+      apiHost: 'https://securestage.paytmpayments.com',
+      checkoutHost: 'https://securestage.paytmpayments.com',
+      requestTimeoutMilliseconds: 10_000,
+      attemptLifetimeMinutes: 15,
+    }),
+  }),
   auth: Object.freeze({
     cookieName: readCookieName(process.env.CAMPUSBITE_AUTH_COOKIE_NAME),
     cookieSecure:

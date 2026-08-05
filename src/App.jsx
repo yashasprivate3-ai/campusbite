@@ -17,7 +17,12 @@ import { PhoneVerificationDialog } from './components/PhoneVerificationDialog'
 import { SessionControls } from './components/SessionControls'
 import { useKitchenOrders } from './hooks/useKitchenOrders'
 import { useTrackedOrder } from './hooks/useTrackedOrder'
-import { createOrder } from './services/ordersApi'
+import {
+  confirmPaytmPayment,
+  getPaymentStatus,
+  initiatePaytmPayment,
+} from './services/paymentsApi'
+import { openPaytmCheckout } from './services/paytmCheckout'
 import {
   buildKitchenActivity,
   completeBatchRecord,
@@ -45,6 +50,7 @@ const pickupSlots = ['12:00 PM - 12:15 PM', '12:15 PM - 12:30 PM', '12:30 PM - 1
 const KITCHEN_BATCHES_KEY = 'campusbite-kitchen-batches'
 const STUDENT_CART_KEY_PREFIX = 'campusbite-student-cart'
 const TRACKED_ORDER_ID_KEY_PREFIX = 'campusbite-tracked-order-id'
+const PAYMENT_ATTEMPT_ID_KEY_PREFIX = 'campusbite-payment-attempt-id'
 
 function loadKitchenBatches() {
   try {
@@ -93,6 +99,16 @@ function loadTrackedOrderId(publicId) {
   return Number.isSafeInteger(storedOrderId) && storedOrderId > 0
     ? storedOrderId
     : null
+}
+
+function loadPaymentAttemptId(publicId) {
+  try {
+    return localStorage.getItem(
+      getStudentStorageKey(PAYMENT_ATTEMPT_ID_KEY_PREFIX, publicId),
+    )
+  } catch {
+    return null
+  }
 }
 
 const KITCHEN_QUEUE_STATUSES = ['new', 'preparing', 'ready']
@@ -386,6 +402,9 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   const [confirmedOrder, setConfirmedOrder] = useState(null)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [orderSubmitError, setOrderSubmitError] = useState('')
+  const [paymentMessage, setPaymentMessage] = useState('')
+  const [paymentStatus, setPaymentStatus] = useState(null)
+  const [trustedPaymentTotal, setTrustedPaymentTotal] = useState(null)
   const [isPhoneVerificationOpen, setIsPhoneVerificationOpen] = useState(false)
   const [activeView, setActiveView] = useState(() =>
     getDefaultView(user.role),
@@ -401,7 +420,11 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
       ? 'tracking'
       : 'menu',
   )
+  const [pendingPaymentAttemptId, setPendingPaymentAttemptId] = useState(() =>
+    user.role === 'STUDENT' ? loadPaymentAttemptId(user.publicId) : null,
+  )
   const checkoutRequestId = useRef(null)
+  const paymentConfirmationRequest = useRef(null)
   const checkoutSignature = JSON.stringify({
     cart,
     instructions: instructions.trim(),
@@ -460,7 +483,59 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   }, [trackedOrderId, user.publicId])
 
   useEffect(() => {
-    if (!canUseKitchen) return
+    if (user.role !== 'STUDENT') return
+    const storageKey = getStudentStorageKey(
+      PAYMENT_ATTEMPT_ID_KEY_PREFIX,
+      user.publicId,
+    )
+    if (pendingPaymentAttemptId) {
+      localStorage.setItem(storageKey, pendingPaymentAttemptId)
+    } else {
+      localStorage.removeItem(storageKey)
+    }
+  }, [pendingPaymentAttemptId, user.publicId, user.role])
+
+  useEffect(() => {
+    if (user.role !== 'STUDENT' || !pendingPaymentAttemptId) return
+    const controller = new AbortController()
+
+    getPaymentStatus(pendingPaymentAttemptId, { signal: controller.signal })
+      .then((attempt) => {
+        setPaymentStatus(attempt.status)
+        setTrustedPaymentTotal(attempt.amount)
+        if (attempt.status === 'paid' && attempt.order) {
+          setConfirmedOrder(attempt.order)
+          setTrackedOrderId(attempt.order.id)
+          setTrackedOrder(attempt.order)
+          setCart({})
+          setCheckoutStep(null)
+          setStudentView('tracking')
+          setPendingPaymentAttemptId(null)
+          setPaymentMessage('Payment confirmed. Your order is now in the Kitchen queue.')
+          return
+        }
+
+        if (attempt.status === 'pending' || attempt.status === 'initiated') {
+          setPaymentMessage(
+            'Paytm has not confirmed this payment yet. No Kitchen order has been created.',
+          )
+        } else {
+          setPaymentMessage(
+            'The previous payment did not complete. Your cart is still available.',
+          )
+          setPendingPaymentAttemptId(null)
+          checkoutRequestId.current = null
+        }
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') setPaymentMessage(error.message)
+      })
+
+    return () => controller.abort()
+  }, [pendingPaymentAttemptId, setTrackedOrder, user.publicId, user.role])
+
+  useEffect(() => {
+    if (user.role !== 'STUDENT') return
 
     if (
       checkoutSignatureRef.current !== checkoutSignature &&
@@ -470,7 +545,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
       checkoutRequestId.current = null
       setOrderSubmitError('')
     }
-  }, [canUseKitchen, checkoutSignature, isSubmittingOrder])
+  }, [checkoutSignature, isSubmittingOrder, user.role])
 
   useEffect(() => {
     const activeBatchRecords = kitchenBatches.filter(
@@ -543,9 +618,70 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   function openCheckout() {
     setIsCartOpen(false)
     setOrderSubmitError('')
+    setPaymentMessage('')
+    setPaymentStatus(null)
+    setTrustedPaymentTotal(null)
     checkoutRequestId.current = null
     checkoutSignatureRef.current = checkoutSignature
     setCheckoutStep('details')
+  }
+
+  function applyConfirmedPayment(attempt) {
+    setConfirmedOrder(attempt.order)
+    setTrackedOrderId(attempt.order.id)
+    setTrackedOrder(attempt.order)
+    setCart({})
+    setCheckoutStep(null)
+    setStudentView('tracking')
+    setPendingPaymentAttemptId(null)
+    setPaymentStatus('paid')
+    setPaymentMessage('Payment confirmed. Your order is now in the Kitchen queue.')
+    checkoutRequestId.current = null
+    setPickupMethod('asap')
+    setPickupSlot(pickupSlots[0])
+    setInstructions('')
+  }
+
+  async function verifyPaymentWithBackend(attemptId) {
+    if (paymentConfirmationRequest.current) {
+      return paymentConfirmationRequest.current
+    }
+
+    const request = confirmPaytmPayment(attemptId)
+    paymentConfirmationRequest.current = request
+    setPaymentStatus('checking')
+    setPaymentMessage('CampusBite is verifying the payment with Paytm…')
+
+    try {
+      const attempt = await request
+      setPaymentStatus(attempt.status)
+      setTrustedPaymentTotal(attempt.amount)
+
+      if (attempt.status === 'paid' && attempt.order) {
+        applyConfirmedPayment(attempt)
+      } else if (attempt.status === 'pending' || attempt.status === 'initiated') {
+        setPaymentMessage(
+          'Payment is still pending at Paytm. No Kitchen order has been created yet.',
+        )
+      } else {
+        setPaymentMessage(
+          attempt.responseMessage ||
+            'Payment was not successful. No Kitchen order was created.',
+        )
+        setPendingPaymentAttemptId(null)
+        checkoutRequestId.current = null
+      }
+
+      return attempt
+    } catch (error) {
+      setOrderSubmitError(error.message)
+      setPaymentMessage(
+        'Payment could not be verified. Check its status before trying another payment.',
+      )
+      throw error
+    } finally {
+      paymentConfirmationRequest.current = null
+    }
   }
 
   async function confirmOrder() {
@@ -563,34 +699,61 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
     setOrderSubmitError('')
 
     try {
-      const savedOrder = await createOrder({
-        clientRequestId: requestId,
+      const attempt = await initiatePaytmPayment({
+        idempotencyKey: requestId,
         items: cartItems.map((item) => ({
           menuItemId: item.id,
-          name: item.name,
           quantity: cart[item.id],
-          unitPricePaise: item.price * 100,
-          preparationType:
-            item.category === 'Ready now' ? 'ready' : 'made-to-order',
-          preparationTime: item.time,
         })),
         pickupMethod,
         pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
         instructions: instructions.trim(),
-        source: 'student',
       })
+      setPendingPaymentAttemptId(attempt.attemptId)
+      setTrustedPaymentTotal(attempt.amount)
+      setPaymentStatus(attempt.status)
 
-      setConfirmedOrder(savedOrder)
-      setTrackedOrderId(savedOrder.id)
-      setTrackedOrder(savedOrder)
-      setCart({})
-      setCheckoutStep('confirmation')
-      checkoutRequestId.current = null
+      if (attempt.status === 'paid' && attempt.order) {
+        applyConfirmedPayment(attempt)
+        return
+      }
+
+      if (!attempt.checkout) {
+        setPaymentMessage(
+          'This payment is awaiting a Paytm status check. No Kitchen order has been created.',
+        )
+        return
+      }
+
+      setPaymentMessage(`CampusBite verified the total as ₹${attempt.amount}.`)
+      await openPaytmCheckout(attempt.checkout, {
+        onTransactionStatus: () => {
+          verifyPaymentWithBackend(attempt.attemptId).catch(() => {})
+        },
+        onNotify: (eventName) => {
+          verifyPaymentWithBackend(attempt.attemptId)
+            .then((checkedAttempt) => {
+              if (
+                ['pending', 'initiated'].includes(checkedAttempt.status) &&
+                /cancel|close/i.test(eventName)
+              ) {
+                setPaymentMessage(
+                  'Paytm Checkout was closed. The payment is still unconfirmed, so no Kitchen order was created.',
+                )
+              }
+            })
+            .catch(() => {})
+        },
+      })
     } catch (error) {
       setOrderSubmitError(error.message)
       if (error.code === 'phone_verification_required') {
         setCheckoutStep(null)
         setIsPhoneVerificationOpen(true)
+      }
+      if (error.code === 'payment_attempt_terminal') {
+        setPendingPaymentAttemptId(null)
+        checkoutRequestId.current = null
       }
     } finally {
       setIsSubmittingOrder(false)
@@ -831,6 +994,24 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
           </section>
         )}
 
+        {paymentMessage && !checkoutStep && (
+          <section className={`payment-recovery-banner ${paymentStatus || ''}`} aria-live="polite">
+            <div>
+              <strong>Payment status</strong>
+              <span>{paymentMessage}</span>
+            </div>
+            {pendingPaymentAttemptId && (
+              <button
+                disabled={paymentStatus === 'checking'}
+                onClick={() => verifyPaymentWithBackend(pendingPaymentAttemptId).catch(() => {})}
+                type="button"
+              >
+                {paymentStatus === 'checking' ? 'Checking…' : 'Check again'}
+              </button>
+            )}
+          </section>
+        )}
+
         <section className="menu-section" aria-labelledby="menu-title">
           <div className="section-heading">
             <div><p className="eyebrow">Fresh from the canteen</p><h2 id="menu-title">Today's menu</h2></div>
@@ -895,7 +1076,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                 <div className="cart-summary">
                   <div><span>Item total</span><strong>₹{cartTotal}</strong></div>
                   <button className="clear-cart-button" type="button" onClick={clearCart}>Clear cart</button>
-                  <p>Payment integration comes next. This checkout currently confirms a test order.</p>
+                  <p>Your final total is verified by CampusBite before Paytm Checkout opens.</p>
                   <button className="checkout-button" type="button" onClick={openCheckout}>
                     Continue to checkout · ₹{cartTotal}
                   </button>
@@ -947,15 +1128,18 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
             {checkoutStep === 'review' && (
               <div className="checkout-content">
                 <p className="eyebrow">Final check</p><h1>Review your order</h1>
-                <p className="checkout-intro">Confirm the items and pickup timing before creating this test order.</p>
+                <p className="checkout-intro">Confirm the items and pickup timing before paying securely through Paytm staging.</p>
                 <div className="review-card">
                   {cartItems.map((item) => (
                     <div className="review-row" key={item.id}><span>{item.emoji}</span><div><strong>{item.name}</strong><small>Quantity {cart[item.id]}</small></div><strong>₹{item.price * cart[item.id]}</strong></div>
                   ))}
-                  <div className="review-total"><span>Total</span><strong>₹{cartTotal}</strong></div>
+                  <div className="review-total"><span>{trustedPaymentTotal ? 'CampusBite verified total' : 'Estimated total'}</span><strong>₹{trustedPaymentTotal || cartTotal}</strong></div>
                 </div>
                 <div className="pickup-summary"><span>Pickup</span><strong>{pickupMethod === 'scheduled' ? pickupSlot : 'As soon as ready'}</strong>{instructions.trim() && <small>Note: {instructions.trim()}</small>}</div>
-                <div className="demo-notice">No payment will be charged. Payment verification will be connected in a later sprint.</div>
+                <div className="payment-safety-notice">
+                  <strong>Paytm staging · UPI only</strong>
+                  <span>No order reaches the Kitchen until CampusBite verifies the payment directly with Paytm.</span>
+                </div>
                 {!user.phoneVerified && (
                   <div className="phone-verification-review-notice" role="status">
                     Verify your saved phone number before submitting this order.
@@ -964,8 +1148,13 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                 )}
                 {orderSubmitError && (
                   <div className="checkout-api-error" role="alert">
-                    <strong>Order not saved</strong>
-                    <span>{orderSubmitError} Your cart is still here—please try again.</span>
+                    <strong>Payment not confirmed</strong>
+                    <span>{orderSubmitError} Your cart is still here.</span>
+                  </div>
+                )}
+                {paymentMessage && (
+                  <div className={`payment-status-message ${paymentStatus || ''}`} role="status">
+                    {paymentMessage}
                   </div>
                 )}
                 <button
@@ -975,9 +1164,9 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                   disabled={isSubmittingOrder}
                 >
                   {isSubmittingOrder
-                    ? 'Saving your order…'
+                    ? 'Connecting securely to Paytm…'
                     : user.phoneVerified
-                      ? `Confirm test order · ₹${cartTotal}`
+                      ? `Pay securely with UPI · ₹${cartTotal}`
                       : 'Verify phone to place order'}
                 </button>
               </div>

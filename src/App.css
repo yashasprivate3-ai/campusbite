@@ -616,6 +616,44 @@
   font-weight: 900;
 }
 
+.payment-recovery-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: min(1180px, calc(100% - 40px));
+  box-sizing: border-box;
+  margin: 18px auto 0;
+  padding: 16px 18px;
+  overflow-wrap: anywhere;
+  border: 1px solid #ead29c;
+  border-radius: 18px;
+  color: #71552a;
+  background: #fff9e9;
+}
+
+.payment-recovery-banner > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.payment-recovery-banner span {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.payment-recovery-banner button {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 9px 14px;
+  border: 1px solid #c9d2cc;
+  border-radius: 11px;
+  color: #173f35;
+  background: #fff;
+  font-weight: 900;
+}
+
 .phone-verification-overlay {
   position: fixed;
   z-index: 300;
@@ -770,13 +808,15 @@
 }
 
 @media (max-width: 620px) {
-  .phone-verification-banner {
+  .phone-verification-banner,
+  .payment-recovery-banner {
     align-items: stretch;
     flex-direction: column;
     width: calc(100% - 24px);
   }
 
-  .phone-verification-banner button {
+  .phone-verification-banner button,
+  .payment-recovery-banner button {
     width: 100%;
   }
 
@@ -1746,7 +1786,9 @@ main {
 .pickup-summary { display: grid; gap: 5px; margin: 16px 0; padding: 18px; }
 .pickup-summary span, .pickup-summary small { color: #7b817d; font-size: 12px; }
 
-.demo-notice {
+.payment-safety-notice {
+  display: grid;
+  gap: 4px;
   margin: 18px 0 4px;
   padding: 14px;
   border-radius: 13px;
@@ -1754,6 +1796,34 @@ main {
   background: #fff0cf;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.payment-status-message {
+  margin: 14px 0 0;
+  padding: 13px 15px;
+  overflow-wrap: anywhere;
+  border: 1px solid #c6d8d1;
+  border-radius: 12px;
+  color: #315d50;
+  background: #eff8f4;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.payment-status-message.failed,
+.payment-status-message.cancelled,
+.payment-status-message.expired {
+  border-color: #e7b8a8;
+  color: #7a3526;
+  background: #fff5f1;
+}
+
+.payment-status-message.pending,
+.payment-status-message.initiated,
+.payment-status-message.checking {
+  border-color: #ead29c;
+  color: #71552a;
+  background: #fff9e9;
 }
 
 .confirmation-content { padding-top: 12vh; text-align: center; }

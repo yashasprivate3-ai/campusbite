@@ -312,6 +312,94 @@ function createUniqueToken(database) {
   throw new Error('Unable to allocate a unique order token.')
 }
 
+function insertNormalizedOrder(database, normalizedOrder, studentUserId) {
+  const token = createUniqueToken(database)
+  const fingerprint = createFingerprint(normalizedOrder)
+  const orderResult = database
+    .prepare(
+       `INSERT INTO orders (
+         token, client_request_id, request_fingerprint, student_user_id,
+         pickup_method, pickup_slot, instructions, source, total_amount,
+         status
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')`,
+    )
+    .run(
+      token,
+      normalizedOrder.clientRequestId,
+      fingerprint,
+      studentUserId,
+      normalizedOrder.pickupMethod,
+      normalizedOrder.pickupSlot,
+      normalizedOrder.instructions,
+      normalizedOrder.source,
+      normalizedOrder.totalPaise,
+    )
+  const orderId = Number(orderResult.lastInsertRowid)
+  const insertItem = database.prepare(
+    `INSERT INTO order_items (
+       order_id, menu_item_id, item_name, quantity, unit_price_paise,
+       preparation_type, preparation_time
+     ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  )
+
+  normalizedOrder.items.forEach((item) => {
+    insertItem.run(
+      orderId,
+      item.menuItemId,
+      item.name,
+      item.quantity,
+      item.unitPricePaise,
+      item.preparationType,
+      item.preparationTime,
+    )
+  })
+
+  database
+    .prepare(
+      `INSERT INTO status_history (order_id, status)
+       VALUES (?, 'new')`,
+    )
+    .run(orderId)
+  database
+    .prepare(
+      `INSERT INTO activity_events (order_id, event_type, detail)
+       VALUES (?, 'order_received', ?)`,
+    )
+    .run(orderId, token)
+
+  return getOrderOrNull(database, orderId)
+}
+
+export function createPaidOrderInCurrentTransaction(
+  database,
+  { attemptPublicId, checkoutDetails, items, totalPaise },
+  studentUserId,
+) {
+  const normalizedOrder = {
+    clientRequestId: `payment:${attemptPublicId}`,
+    pickupMethod: checkoutDetails.pickupMethod,
+    pickupSlot: checkoutDetails.pickupSlot,
+    instructions: checkoutDetails.instructions,
+    source: 'student',
+    items,
+    totalPaise,
+  }
+  const fingerprint = createFingerprint(normalizedOrder)
+  const existing = resolveIdempotentOrder(
+    database,
+    normalizedOrder,
+    fingerprint,
+    studentUserId,
+  )
+
+  if (existing) return { created: false, order: existing }
+
+  return {
+    created: true,
+    order: insertNormalizedOrder(database, normalizedOrder, studentUserId),
+  }
+}
+
 export function createOrder(database, payload, studentUserId) {
   if (!Number.isSafeInteger(studentUserId) || studentUserId < 1) {
     throw new Error('Authenticated student ownership is required.')
@@ -343,61 +431,14 @@ export function createOrder(database, payload, studentUserId) {
       return { created: false, order: concurrentOrder }
     }
 
-    const token = createUniqueToken(database)
-    const orderResult = database
-      .prepare(
-         `INSERT INTO orders (
-           token, client_request_id, request_fingerprint, student_user_id,
-           pickup_method, pickup_slot, instructions, source, total_amount,
-           status
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')`,
-      )
-      .run(
-        token,
-        normalizedOrder.clientRequestId,
-        fingerprint,
-        studentUserId,
-        normalizedOrder.pickupMethod,
-        normalizedOrder.pickupSlot,
-        normalizedOrder.instructions,
-        normalizedOrder.source,
-        normalizedOrder.totalPaise,
-      )
-    const orderId = Number(orderResult.lastInsertRowid)
-    const insertItem = database.prepare(
-      `INSERT INTO order_items (
-         order_id, menu_item_id, item_name, quantity, unit_price_paise,
-         preparation_type, preparation_time
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    const order = insertNormalizedOrder(
+      database,
+      normalizedOrder,
+      studentUserId,
     )
 
-    normalizedOrder.items.forEach((item) => {
-      insertItem.run(
-        orderId,
-        item.menuItemId,
-        item.name,
-        item.quantity,
-        item.unitPricePaise,
-        item.preparationType,
-        item.preparationTime,
-      )
-    })
-
-    database
-      .prepare(
-        `INSERT INTO status_history (order_id, status)
-         VALUES (?, 'new')`,
-      )
-      .run(orderId)
-    database
-      .prepare(
-        `INSERT INTO activity_events (order_id, event_type, detail)
-         VALUES (?, 'order_received', ?)`,
-      )
-      .run(orderId, token)
-
     database.exec('COMMIT;')
-    return { created: true, order: getOrderOrNull(database, orderId) }
+    return { created: true, order }
   } catch (error) {
     database.exec('ROLLBACK;')
 

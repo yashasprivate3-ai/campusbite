@@ -4,6 +4,7 @@ import { initializeDatabase } from './db.js'
 import { handleHealthCheck } from './routes/health.js'
 import { handleAuthRoutes } from './routes/auth.js'
 import { handleOrderRoutes } from './routes/orders.js'
+import { handlePaymentRoutes } from './routes/payments.js'
 import { seedDevelopmentAccounts } from './services/devAccounts.js'
 import {
   sendApiError,
@@ -12,6 +13,7 @@ import {
 } from './services/http.js'
 import { LoginThrottle } from './services/loginThrottle.js'
 import { createPhoneVerificationProvider } from './services/phoneVerificationProvider.js'
+import { createPaytmClient } from './services/paytmClient.js'
 
 let database
 
@@ -45,6 +47,7 @@ const phoneVerificationProvider = createPhoneVerificationProvider(
   serverConfig.auth.otp,
   serverConfig.isProduction,
 )
+const paytmClient = createPaytmClient(serverConfig.payments)
 
 const server = createServer(async (request, response) => {
   try {
@@ -67,6 +70,20 @@ const server = createServer(async (request, response) => {
         serverConfig.auth,
         loginThrottle,
         phoneVerificationProvider,
+      )
+    ) {
+      return
+    }
+
+    if (
+      await handlePaymentRoutes(
+        request,
+        response,
+        requestUrl,
+        database,
+        serverConfig.auth,
+        serverConfig.payments,
+        paytmClient,
       )
     ) {
       return

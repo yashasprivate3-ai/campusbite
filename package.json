@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "google-auth-library": "^10.9.0",
+    "paytmchecksum": "^1.5.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

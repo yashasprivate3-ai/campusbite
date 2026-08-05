@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -251,6 +251,47 @@ function migrateToVersion5(database) {
   `)
 }
 
+function migrateToVersion6(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS payment_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      public_id TEXT NOT NULL UNIQUE,
+      student_user_id INTEGER NOT NULL,
+      provider TEXT NOT NULL CHECK (provider IN ('paytm')),
+      provider_order_id TEXT NOT NULL UNIQUE,
+      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+      currency TEXT NOT NULL DEFAULT 'INR' CHECK (currency = 'INR'),
+      trusted_cart_json TEXT NOT NULL,
+      checkout_details_json TEXT NOT NULL,
+      request_fingerprint TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      checkout_token TEXT,
+      status TEXT NOT NULL
+        CHECK (status IN ('created', 'initiated', 'pending', 'paid', 'failed', 'cancelled', 'expired')),
+      provider_txn_id TEXT,
+      response_code TEXT,
+      response_message TEXT,
+      expires_at TEXT NOT NULL,
+      initiated_at TEXT,
+      verified_at TEXT,
+      order_id INTEGER UNIQUE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (student_user_id) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE RESTRICT,
+      UNIQUE (student_user_id, idempotency_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_payment_attempts_student_created
+      ON payment_attempts(student_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_payment_attempts_status
+      ON payment_attempts(status, updated_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_attempts_provider_txn
+      ON payment_attempts(provider_txn_id)
+      WHERE provider_txn_id IS NOT NULL;
+  `)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -287,6 +328,10 @@ export function initializeDatabase(databasePath) {
 
     if (currentVersion < 5) {
       migrateToVersion5(database)
+    }
+
+    if (currentVersion < 6) {
+      migrateToVersion6(database)
     }
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)

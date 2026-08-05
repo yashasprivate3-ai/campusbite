@@ -1,5 +1,4 @@
 import {
-  createOrder,
   getOrder,
   listOrders,
   ORDER_STATUSES,
@@ -10,7 +9,7 @@ import {
   sendJson,
   sendMethodNotAllowed,
 } from '../services/http.js'
-import { invalidRequest } from '../services/apiError.js'
+import { ApiError, invalidRequest } from '../services/apiError.js'
 import {
   optionalAuth,
   requireAnyRole,
@@ -68,16 +67,12 @@ export async function handleOrderRoutes(
         request,
       )
       requireStudentPhoneVerified(authContext)
-      const result = createOrder(
-        database,
-        await readJsonBody(request),
-        authContext.internalUserId,
+      await readJsonBody(request)
+      throw new ApiError(
+        409,
+        'verified_payment_required',
+        'Create new orders through the secure Paytm payment flow.',
       )
-      sendJson(response, result.created ? 201 : 200, {
-        created: result.created,
-        order: result.order,
-      })
-      return true
     }
 
     if (request.method === 'GET') {

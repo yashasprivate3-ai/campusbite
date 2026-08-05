@@ -227,8 +227,9 @@ export async function requestPhoneVerification(
     throw error
   }
 
+  let deliveryResult
   try {
-    await provider.deliver({ code, phoneNumber })
+    deliveryResult = await provider.deliver({ code, phoneNumber })
   } catch (error) {
     const failedAt = new Date().toISOString()
     database
@@ -252,6 +253,9 @@ export async function requestPhoneVerification(
       challengeId,
       maskedPhone: maskPhoneNumber(phoneNumber),
       provider: provider.name,
+      ...(deliveryResult?.audit?.templateName
+        ? { templateName: deliveryResult.audit.templateName }
+        : {}),
     },
   })
 
@@ -259,6 +263,7 @@ export async function requestPhoneVerification(
     challengeCreated: true,
     expiresAt: expiresAt.toISOString(),
     maskedPhone: maskPhoneNumber(phoneNumber),
+    provider: provider.name,
     resendAvailableAt: resendAvailableAt.toISOString(),
   }
 }

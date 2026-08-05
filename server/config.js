@@ -242,12 +242,27 @@ export const serverConfig = Object.freeze({
       metaWhatsApp: Object.freeze({
         accessToken: String(
           process.env.CAMPUSBITE_META_WHATSAPP_ACCESS_TOKEN || '',
-        ),
+        ).trim(),
         phoneNumberId: String(
           process.env.CAMPUSBITE_META_WHATSAPP_PHONE_NUMBER_ID || '',
-        ),
+        ).trim(),
+        wabaId: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_WABA_ID || '',
+        ).trim(),
         templateName: String(
           process.env.CAMPUSBITE_META_WHATSAPP_TEMPLATE_NAME || '',
+        ).trim(),
+        templateLanguage: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_TEMPLATE_LANGUAGE || 'en',
+        ).trim(),
+        graphVersion: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_GRAPH_VERSION || '',
+        ).trim(),
+        requestTimeoutMilliseconds: readInteger(
+          process.env.CAMPUSBITE_META_WHATSAPP_REQUEST_TIMEOUT_MS,
+          10_000,
+          'CAMPUSBITE_META_WHATSAPP_REQUEST_TIMEOUT_MS',
+          { min: 1_000, max: 30_000 },
         ),
       }),
     }),

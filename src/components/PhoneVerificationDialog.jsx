@@ -45,7 +45,11 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user }) {
       const nextChallenge = await requestPhoneVerification()
       setChallenge(nextChallenge)
       setCode('')
-      setMessage('Verification code requested securely.')
+      setMessage(
+        nextChallenge.provider === 'meta-whatsapp'
+          ? 'Verification code sent to WhatsApp.'
+          : 'Verification code requested securely.',
+      )
       setNow(Date.now())
     } catch (requestError) {
       setError(requestError.message)

@@ -84,8 +84,8 @@ function readDevelopmentOtpCode(value, provider) {
 function readPaymentProvider(value) {
   const provider = String(value || 'disabled').trim().toLowerCase()
 
-  if (!['disabled', 'paytm'].includes(provider)) {
-    throw new Error('CAMPUSBITE_PAYMENT_PROVIDER must be disabled or paytm.')
+  if (!['disabled', 'razorpay'].includes(provider)) {
+    throw new Error('CAMPUSBITE_PAYMENT_PROVIDER must be disabled or razorpay.')
   }
 
   return provider
@@ -93,15 +93,15 @@ function readPaymentProvider(value) {
 
 function requirePaymentValue(value, label, provider) {
   const normalized = String(value || '').trim()
-  if (provider === 'paytm' && !normalized) {
-    throw new Error(`${label} is required when Paytm payments are enabled.`)
+  if (provider === 'razorpay' && !normalized) {
+    throw new Error(`${label} is required when Razorpay payments are enabled.`)
   }
   return normalized
 }
 
 function readPublicAppUrl(value, provider) {
   const normalized = String(value || '').trim()
-  if (provider !== 'paytm' && !normalized) return 'http://localhost:5173'
+  if (provider !== 'razorpay' && !normalized) return 'http://localhost:5173'
 
   let parsed
   try {
@@ -132,47 +132,35 @@ const otpProvider = readOtpProvider(process.env.CAMPUSBITE_OTP_PROVIDER)
 const paymentProvider = readPaymentProvider(
   process.env.CAMPUSBITE_PAYMENT_PROVIDER,
 )
-const paytmEnvironment = String(
-  process.env.PAYTM_ENVIRONMENT || 'staging',
+const razorpayEnvironment = String(
+  process.env.RAZORPAY_ENVIRONMENT || 'test',
 ).trim().toLowerCase()
 
 if (isProduction && otpProvider === 'development') {
   throw new Error('The development OTP provider cannot run in production.')
 }
 
-if (paymentProvider === 'paytm' && paytmEnvironment !== 'staging') {
-  throw new Error('Sprint 8.1 supports PAYTM_ENVIRONMENT=staging only.')
+if (paymentProvider === 'razorpay' && razorpayEnvironment !== 'test') {
+  throw new Error('Sprint 8.2 supports RAZORPAY_ENVIRONMENT=test only.')
 }
 
-if (isProduction && paymentProvider === 'paytm') {
-  throw new Error('Paytm staging credentials cannot run in production.')
+if (isProduction && paymentProvider === 'razorpay') {
+  throw new Error('Razorpay Test Mode credentials cannot run in production.')
 }
 
-const paytmMid = requirePaymentValue(
-  process.env.PAYTM_MID,
-  'PAYTM_MID',
+const razorpayKeyId = requirePaymentValue(
+  process.env.RAZORPAY_KEY_ID,
+  'RAZORPAY_KEY_ID',
   paymentProvider,
 )
-const paytmMerchantKey = requirePaymentValue(
-  process.env.PAYTM_MERCHANT_KEY,
-  'PAYTM_MERCHANT_KEY',
+const razorpayKeySecret = requirePaymentValue(
+  process.env.RAZORPAY_KEY_SECRET,
+  'RAZORPAY_KEY_SECRET',
   paymentProvider,
 )
-const paytmWebsite = requirePaymentValue(
-  process.env.PAYTM_WEBSITE,
-  'PAYTM_WEBSITE',
-  paymentProvider,
-)
-const paytmIndustryType = requirePaymentValue(
-  process.env.PAYTM_INDUSTRY_TYPE,
-  'PAYTM_INDUSTRY_TYPE',
-  paymentProvider,
-)
-const paytmChannelId = requirePaymentValue(
-  process.env.PAYTM_CHANNEL_ID,
-  'PAYTM_CHANNEL_ID',
-  paymentProvider,
-)
+const razorpayWebhookSecret = String(
+  process.env.RAZORPAY_WEBHOOK_SECRET || '',
+).trim()
 
 export const serverConfig = Object.freeze({
   host: process.env.CAMPUSBITE_API_HOST || '127.0.0.1',
@@ -185,20 +173,17 @@ export const serverConfig = Object.freeze({
   isProduction,
   payments: Object.freeze({
     provider: paymentProvider,
-    enabled: paymentProvider === 'paytm',
+    enabled: paymentProvider === 'razorpay',
     publicAppUrl: readPublicAppUrl(
       process.env.CAMPUSBITE_PUBLIC_APP_URL,
       paymentProvider,
     ),
-    paytm: Object.freeze({
-      environment: paytmEnvironment,
-      mid: paytmMid,
-      merchantKey: paytmMerchantKey,
-      website: paytmWebsite,
-      industryType: paytmIndustryType,
-      channelId: paytmChannelId,
-      apiHost: 'https://securestage.paytmpayments.com',
-      checkoutHost: 'https://securestage.paytmpayments.com',
+    razorpay: Object.freeze({
+      environment: razorpayEnvironment,
+      keyId: razorpayKeyId,
+      keySecret: razorpayKeySecret,
+      webhookSecret: razorpayWebhookSecret,
+      apiHost: 'https://api.razorpay.com',
       requestTimeoutMilliseconds: 10_000,
       attemptLifetimeMinutes: 15,
     }),

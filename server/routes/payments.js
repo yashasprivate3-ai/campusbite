@@ -5,9 +5,9 @@ import {
   ROLES,
 } from '../services/authorization.js'
 import {
-  confirmPaytmPayment,
-  getPaytmPaymentStatus,
-  initiatePaytmPayment,
+  getPaymentStatus,
+  initiatePayment,
+  verifyPayment,
 } from '../services/payments.js'
 import {
   readJsonBody,
@@ -34,38 +34,37 @@ export async function handlePaymentRoutes(
   database,
   authConfig,
   paymentConfig,
-  paytmClient,
+  paymentProvider,
 ) {
-  if (requestUrl.pathname === '/api/payments/paytm/initiate') {
+  if (requestUrl.pathname === '/api/payments/initiate') {
     if (request.method !== 'POST') {
       sendMethodNotAllowed(response, ['POST'])
       return true
     }
     const authContext = requireStudent(database, request, authConfig, true)
-    const attempt = await initiatePaytmPayment(
+    const attempt = await initiatePayment(
       database,
       await readJsonBody(request),
       authContext.internalUserId,
       paymentConfig,
-      paytmClient,
+      paymentProvider,
     )
     sendJson(response, attempt.reused ? 200 : 201, { attempt })
     return true
   }
 
-  if (requestUrl.pathname === '/api/payments/paytm/confirm') {
+  if (requestUrl.pathname === '/api/payments/verify') {
     if (request.method !== 'POST') {
       sendMethodNotAllowed(response, ['POST'])
       return true
     }
-    const authContext = requireStudent(database, request, authConfig, false)
-    const payload = await readJsonBody(request)
-    const attempt = await confirmPaytmPayment(
+    const authContext = requireStudent(database, request, authConfig, true)
+    const attempt = await verifyPayment(
       database,
-      payload.attemptId,
+      await readJsonBody(request),
       authContext.internalUserId,
       paymentConfig,
-      paytmClient,
+      paymentProvider,
     )
     sendJson(response, 200, { attempt })
     return true
@@ -79,13 +78,13 @@ export async function handlePaymentRoutes(
       sendMethodNotAllowed(response, ['GET'])
       return true
     }
-    const authContext = requireStudent(database, request, authConfig, false)
-    const attempt = await getPaytmPaymentStatus(
+    const authContext = requireStudent(database, request, authConfig, true)
+    const attempt = await getPaymentStatus(
       database,
       decodeURIComponent(statusMatch[1]),
       authContext.internalUserId,
       paymentConfig,
-      paytmClient,
+      paymentProvider,
     )
     sendJson(response, 200, { attempt })
     return true

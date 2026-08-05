@@ -1,7 +1,7 @@
 import { apiRequest } from './apiClient.js'
 
-export async function initiatePaytmPayment(payload, options = {}) {
-  const response = await apiRequest('/api/payments/paytm/initiate', {
+export async function initiatePayment(payload, options = {}) {
+  const response = await apiRequest('/api/payments/initiate', {
     method: 'POST',
     body: JSON.stringify(payload),
     signal: options.signal,
@@ -9,10 +9,10 @@ export async function initiatePaytmPayment(payload, options = {}) {
   return response.attempt
 }
 
-export async function confirmPaytmPayment(attemptId, options = {}) {
-  const response = await apiRequest('/api/payments/paytm/confirm', {
+export async function verifyPayment(payload, options = {}) {
+  const response = await apiRequest('/api/payments/verify', {
     method: 'POST',
-    body: JSON.stringify({ attemptId }),
+    body: JSON.stringify(payload),
     signal: options.signal,
   })
   return response.attempt

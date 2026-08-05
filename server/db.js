@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -292,6 +292,64 @@ function migrateToVersion6(database) {
   `)
 }
 
+function migrateToVersion7(database) {
+  database.exec(`
+    ALTER TABLE payment_attempts RENAME TO payment_attempts_v6;
+
+    CREATE TABLE payment_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      public_id TEXT NOT NULL UNIQUE,
+      student_user_id INTEGER NOT NULL,
+      provider TEXT NOT NULL CHECK (provider IN ('paytm', 'razorpay')),
+      provider_order_id TEXT NOT NULL,
+      amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+      currency TEXT NOT NULL DEFAULT 'INR' CHECK (currency = 'INR'),
+      trusted_cart_json TEXT NOT NULL,
+      checkout_details_json TEXT NOT NULL,
+      request_fingerprint TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      status TEXT NOT NULL
+        CHECK (status IN ('created', 'initiated', 'pending', 'paid', 'failed', 'cancelled', 'expired')),
+      provider_payment_id TEXT,
+      provider_signature_verified_at TEXT,
+      captured_at TEXT,
+      response_code TEXT,
+      response_message TEXT,
+      expires_at TEXT NOT NULL,
+      initiated_at TEXT,
+      verified_at TEXT,
+      order_id INTEGER UNIQUE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (student_user_id) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE RESTRICT,
+      UNIQUE (student_user_id, idempotency_key),
+      UNIQUE (provider, provider_order_id),
+      UNIQUE (provider, provider_payment_id)
+    );
+
+    INSERT INTO payment_attempts (
+      id, public_id, student_user_id, provider, provider_order_id,
+      amount_paise, currency, trusted_cart_json, checkout_details_json,
+      request_fingerprint, idempotency_key, status, provider_payment_id,
+      response_code, response_message, expires_at, initiated_at, verified_at,
+      order_id, created_at, updated_at
+    )
+    SELECT id, public_id, student_user_id, provider, provider_order_id,
+      amount_paise, currency, trusted_cart_json, checkout_details_json,
+      request_fingerprint, idempotency_key, status, provider_txn_id,
+      response_code, response_message, expires_at, initiated_at, verified_at,
+      order_id, created_at, updated_at
+    FROM payment_attempts_v6;
+
+    DROP TABLE payment_attempts_v6;
+    CREATE INDEX idx_payment_attempts_student_created
+      ON payment_attempts(student_user_id, created_at);
+    CREATE INDEX idx_payment_attempts_status
+      ON payment_attempts(status, updated_at);
+  `)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -332,6 +390,10 @@ export function initializeDatabase(databasePath) {
 
     if (currentVersion < 6) {
       migrateToVersion6(database)
+    }
+
+    if (currentVersion < 7) {
+      migrateToVersion7(database)
     }
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)

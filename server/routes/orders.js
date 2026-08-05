@@ -71,7 +71,7 @@ export async function handleOrderRoutes(
       throw new ApiError(
         409,
         'verified_payment_required',
-        'Create new orders through the secure Paytm payment flow.',
+        'Create new orders through the secure verified payment flow.',
       )
     }
 

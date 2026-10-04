@@ -11,11 +11,11 @@ try {
   if (error.code !== 'ENOENT') throw error
 }
 
-function readPort(value) {
+function readPort(value, label = 'CAMPUSBITE_API_PORT') {
   const port = Number(value || 3001)
 
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Invalid CAMPUSBITE_API_PORT: ${value}`)
+    throw new Error(`Invalid ${label}: ${value}`)
   }
 
   return port
@@ -114,6 +114,10 @@ function readPublicAppUrl(value, provider) {
     throw new Error('CAMPUSBITE_PUBLIC_APP_URL must use HTTP or HTTPS.')
   }
 
+  if (isProduction && parsed.protocol !== 'https:') {
+    throw new Error('CAMPUSBITE_PUBLIC_APP_URL must use HTTPS in production.')
+  }
+
   return parsed.origin
 }
 
@@ -141,11 +145,7 @@ if (isProduction && otpProvider === 'development') {
 }
 
 if (paymentProvider === 'razorpay' && razorpayEnvironment !== 'test') {
-  throw new Error('Sprint 8.2 supports RAZORPAY_ENVIRONMENT=test only.')
-}
-
-if (isProduction && paymentProvider === 'razorpay') {
-  throw new Error('Razorpay Test Mode credentials cannot run in production.')
+  throw new Error('Only RAZORPAY_ENVIRONMENT=test is supported; live payments are not enabled.')
 }
 
 const razorpayKeyId = requirePaymentValue(
@@ -153,6 +153,11 @@ const razorpayKeyId = requirePaymentValue(
   'RAZORPAY_KEY_ID',
   paymentProvider,
 )
+// A test environment label alone must never authorize a live credential.
+if (paymentProvider === 'razorpay' && !/^rzp_test_[A-Za-z0-9]+$/.test(razorpayKeyId)) {
+  throw new Error('RAZORPAY_KEY_ID must be a Razorpay Test Mode key.')
+}
+
 const razorpayKeySecret = requirePaymentValue(
   process.env.RAZORPAY_KEY_SECRET,
   'RAZORPAY_KEY_SECRET',
@@ -162,9 +167,15 @@ const razorpayWebhookSecret = String(
   process.env.RAZORPAY_WEBHOOK_SECRET || '',
 ).trim()
 
+// Hosted production uses the platform listener; local development retains its port.
+const usePlatformPort = isProduction && Boolean(process.env.PORT)
+
 export const serverConfig = Object.freeze({
-  host: process.env.CAMPUSBITE_API_HOST || '127.0.0.1',
-  port: readPort(process.env.CAMPUSBITE_API_PORT),
+  host: process.env.CAMPUSBITE_API_HOST || (isProduction ? '0.0.0.0' : '127.0.0.1'),
+  port: readPort(
+    usePlatformPort ? process.env.PORT : process.env.CAMPUSBITE_API_PORT,
+    usePlatformPort ? 'PORT' : 'CAMPUSBITE_API_PORT',
+  ),
   databasePath: path.resolve(
     projectRoot,
     process.env.CAMPUSBITE_DB_PATH || 'data/campusbite.db',

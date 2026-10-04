@@ -35,7 +35,8 @@ CAMPUSBITE_PUBLIC_APP_URL=http://localhost:5173
 ```
 
 The Key Secret and webhook secret are backend-only. The Test Key ID is the only
-credential sent to Checkout. Test credentials are rejected in production.
+credential sent to Checkout. Test credentials are permitted in production for integration/pilot testing only;
+Live keys and live mode remain blocked. See [deployment setup](DEPLOYMENT.md).
 
 ## Failure, idempotency, and recovery
 

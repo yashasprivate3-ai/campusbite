@@ -3,8 +3,12 @@ import { afterEach, test } from 'node:test'
 import { initializeDatabase } from '../db.js'
 import { buildTrustedCartSnapshot } from '../data/menu.js'
 import { createHmac } from 'node:crypto'
+import { Readable } from 'node:stream'
+import { handlePaymentRoutes } from '../routes/payments.js'
+import { readRawBody } from '../services/http.js'
 import {
   getPaymentStatus,
+  handlePaymentWebhook,
   initiatePayment,
   verifyPayment,
 } from '../services/payments.js'
@@ -31,6 +35,123 @@ function createDatabase() {
 
 afterEach(() => {
   while (databases.length) databases.pop().close()
+})
+
+const webhookSecret = 'synthetic-webhook-secret'
+function webhookGateway(secret = webhookSecret) {
+  return createRazorpayProvider({ ...paymentConfig, razorpay: {
+    keyId: 'rzp_test_synthetic', keySecret: 'different-synthetic-api-secret', webhookSecret: secret,
+  } }, () => { throw new Error('Webhook must not make network requests.') })
+}
+
+function signedEvent(overrides = {}, eventType = 'payment.captured') {
+  const body = Buffer.from(JSON.stringify({ event: eventType, payload: { payment: { entity: {
+    id: 'pay_TestPayment1', order_id: 'order_TestOrder1', amount: 14000,
+    currency: 'INR', status: 'captured', captured: true, ...overrides,
+  } } } }))
+  return [body, createHmac('sha256', webhookSecret).update(body).digest('hex')]
+}
+
+test('webhook checks exact raw bytes, dedicated secret, malformed signatures and JSON', () => {
+  const gateway = webhookGateway()
+  const [body, signature] = signedEvent()
+  assert.equal(gateway.parseWebhook(body, signature).paymentId, 'pay_TestPayment1')
+  for (const invalid of [undefined, '', '0'.repeat(64), ['a'.repeat(64)], 'z'.repeat(64)]) {
+    assert.throws(() => gateway.parseWebhook(body, invalid), { code: 'webhook_signature_invalid' })
+  }
+  assert.throws(() => gateway.parseWebhook(Buffer.concat([body, Buffer.from(' ')]), signature), { code: 'webhook_signature_invalid' })
+  assert.throws(() => webhookGateway('').parseWebhook(body, signature), { code: 'webhook_unavailable' })
+  const malformed = Buffer.from('{')
+  assert.throws(() => gateway.parseWebhook(malformed, createHmac('sha256', webhookSecret).update(malformed).digest('hex')), { code: 'invalid_webhook' })
+})
+
+test('duplicate and out-of-order webhooks recover terminal attempts with exactly one order', async () => {
+  for (const status of ['initiated', 'failed', 'cancelled', 'expired']) {
+    const database = createDatabase()
+    const attempt = await initiatePayment(database, payload(), 1, paymentConfig, provider())
+    database.prepare('UPDATE payment_attempts SET status = ?').run(status)
+    const deliver = (event) => handlePaymentWebhook(database, ...event, paymentConfig, webhookGateway())
+    deliver(signedEvent({}, 'payment.failed'))
+    assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
+    deliver(signedEvent())
+    deliver(signedEvent())
+    deliver(signedEvent({}, 'order.paid'))
+    deliver(signedEvent({}, 'payment.authorized'))
+    const result = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, provider())
+    assert.equal(result.status, 'paid')
+    assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
+    const repeated = await verifyPayment(database, { attemptId: attempt.attemptId }, 1, paymentConfig, provider())
+    assert.equal(repeated.order.id, result.order.id)
+  }
+})
+
+test('webhook rejects mismatches and noncaptured payloads without changing the attempt', async () => {
+  const database = createDatabase()
+  await initiatePayment(database, payload(), 1, paymentConfig, provider())
+  for (const overrides of [{ amount: 1 }, { amount: '14000' }, { currency: 'USD' },
+    { captured: false }, { status: 'authorized' }, { id: 'invalid' }]) {
+    assert.throws(() => handlePaymentWebhook(database, ...signedEvent(overrides), paymentConfig, webhookGateway()))
+  }
+  handlePaymentWebhook(database, ...signedEvent({ order_id: 'order_Unrelated1' }), paymentConfig, webhookGateway())
+  assert.equal(database.prepare('SELECT status FROM payment_attempts').get().status, 'initiated')
+  assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
+  handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
+  assert.throws(() => handlePaymentWebhook(database, ...signedEvent({ id: 'pay_Different1' }), paymentConfig, webhookGateway()), { code: 'webhook_payment_mismatch' })
+  assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
+})
+
+test('webhook cannot reuse a payment linked to another attempt and rolls back failed fulfillment', async () => {
+  const database = createDatabase()
+  const gateway = provider()
+  await initiatePayment(database, payload(), 1, paymentConfig, gateway)
+  await initiatePayment(database, payload('request-0002'), 1, paymentConfig, gateway)
+  database.exec("CREATE TRIGGER fail_order BEFORE INSERT ON orders BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;")
+  assert.throws(() => handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway()))
+  assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
+  database.exec('DROP TRIGGER fail_order;')
+  handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
+  assert.throws(() => handlePaymentWebhook(database, ...signedEvent({ order_id: 'order_TestOrder2' }), paymentConfig, webhookGateway()), { code: 'webhook_payment_mismatch' })
+  assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
+})
+
+test('webhook overlapping checkout and polling fulfillment still creates exactly one order', async () => {
+  for (const path of ['checkout', 'polling']) {
+    const database = createDatabase()
+    const base = provider()
+    const attempt = await initiatePayment(database, payload(), 1, paymentConfig, base)
+    let finishFetch
+    const gateway = { ...base,
+      fetchPayment: () => new Promise((resolve) => { finishFetch = resolve }),
+      fetchProviderStatus: () => new Promise((resolve) => { finishFetch = resolve }),
+    }
+    const pending = path === 'checkout'
+      ? verifyPayment(database, { attemptId: attempt.attemptId, razorpay_order_id: attempt.checkout.orderId,
+        razorpay_payment_id: 'pay_TestPayment1', razorpay_signature: 'a'.repeat(64) }, 1, paymentConfig, gateway)
+      : getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
+    handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
+    finishFetch(await base.fetchPayment())
+    assert.equal((await pending).status, 'paid')
+    handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
+    assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
+  }
+})
+
+test('public webhook route accepts signed bytes without student auth and limits body size', async () => {
+  const database = createDatabase()
+  await initiatePayment(database, payload(), 1, paymentConfig, provider())
+  const [body, signature] = signedEvent()
+  const request = Readable.from([body.subarray(0, 30), body.subarray(30)])
+  request.method = 'POST'
+  request.headers = { 'x-razorpay-signature': signature }
+  let result
+  const response = { writeHead(status) { assert.equal(status, 200) }, end(value) { result = JSON.parse(value) } }
+  assert.equal(await handlePaymentRoutes(request, response, new URL('http://localhost/api/payments/webhook/razorpay'), database, {}, paymentConfig, webhookGateway()), true)
+  assert.deepEqual(result, { received: true })
+  await assert.rejects(readRawBody(Readable.from([Buffer.alloc(65537)])), { statusCode: 413 })
+  let methodStatus
+  await handlePaymentRoutes({ method: 'GET' }, { setHeader() {}, writeHead(status) { methodStatus = status }, end() {} },
+    new URL('http://localhost/api/payments/webhook/razorpay'), database, {}, paymentConfig, webhookGateway())
+  assert.equal(methodStatus, 405)
 })
 
 function payload(idempotencyKey = 'request-0001') {

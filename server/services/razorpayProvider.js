@@ -132,6 +132,37 @@ export function createRazorpayProvider(config, fetchImplementation = fetch) {
 
   return Object.freeze({
     name: 'razorpay',
+    parseWebhook(rawBody, signature) {
+      if (!providerConfig.webhookSecret) {
+        throw new ApiError(503, 'webhook_unavailable', 'Payment webhook is not configured.')
+      }
+      if (!Buffer.isBuffer(rawBody) || typeof signature !== 'string' || !/^[a-f0-9]{64}$/i.test(signature)) {
+        throw new ApiError(400, 'webhook_signature_invalid', 'Webhook verification failed.')
+      }
+      const digest = createHmac('sha256', providerConfig.webhookSecret).update(rawBody).digest()
+      if (!timingSafeEqual(digest, Buffer.from(signature, 'hex'))) {
+        throw new ApiError(400, 'webhook_signature_invalid', 'Webhook verification failed.')
+      }
+      let event
+      try { event = JSON.parse(rawBody.toString('utf8')) } catch {
+        throw new ApiError(400, 'invalid_webhook', 'Invalid webhook event.')
+      }
+      if (!requireObject(event) || typeof event.event !== 'string') {
+        throw new ApiError(400, 'invalid_webhook', 'Invalid webhook event.')
+      }
+      if (!['payment.captured', 'order.paid'].includes(event.event)) return null
+      const payment = event.payload?.payment?.entity
+      if (!requireObject(payment) || payment.status !== 'captured' || payment.captured !== true ||
+          !Number.isSafeInteger(payment.amount) || payment.amount <= 0 ||
+          payment.currency !== 'INR' || typeof payment.id !== 'string' ||
+          !/^pay_[A-Za-z0-9]{6,80}$/.test(payment.id) ||
+          typeof payment.order_id !== 'string' || !/^order_[A-Za-z0-9]{6,80}$/.test(payment.order_id)) {
+        throw new ApiError(400, 'invalid_webhook', 'Invalid captured payment event.')
+      }
+      // Do not retain provider error descriptions, notes, or personal data.
+      return normalizePayment({ id: payment.id, order_id: payment.order_id,
+        amount: payment.amount, currency: payment.currency, status: 'captured', captured: true })
+    },
     async createProviderOrder({ amountPaise, attemptId }) {
       const order = await request('/v1/orders', {
         method: 'POST',

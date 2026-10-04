@@ -6,11 +6,13 @@ import {
 } from '../services/authorization.js'
 import {
   getPaymentStatus,
+  handlePaymentWebhook,
   initiatePayment,
   verifyPayment,
 } from '../services/payments.js'
 import {
   readJsonBody,
+  readRawBody,
   sendJson,
   sendMethodNotAllowed,
 } from '../services/http.js'
@@ -36,6 +38,16 @@ export async function handlePaymentRoutes(
   paymentConfig,
   paymentProvider,
 ) {
+  if (requestUrl.pathname === '/api/payments/webhook/razorpay') {
+    if (request.method !== 'POST') {
+      sendMethodNotAllowed(response, ['POST'])
+      return true
+    }
+    handlePaymentWebhook(database, await readRawBody(request),
+      request.headers['x-razorpay-signature'], paymentConfig, paymentProvider)
+    sendJson(response, 200, { received: true })
+    return true
+  }
   if (requestUrl.pathname === '/api/payments/initiate') {
     if (request.method !== 'POST') {
       sendMethodNotAllowed(response, ['POST'])

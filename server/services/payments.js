@@ -207,7 +207,7 @@ function rejectMismatch(database, row, studentUserId, reason) {
 function fulfillCapturedPayment(database, row, studentUserId, payment, signatureVerifiedAt = null) {
   if (payment.orderId !== row.provider_order_id) return rejectMismatch(database, row, studentUserId, 'order')
   if (payment.amountPaise !== row.amount_paise) return rejectMismatch(database, row, studentUserId, 'amount')
-  if (payment.currency !== 'INR') return rejectMismatch(database, row, studentUserId, 'currency')
+  if (payment.currency !== row.currency || payment.currency !== 'INR') return rejectMismatch(database, row, studentUserId, 'currency')
   if (!payment.captured || payment.status !== 'paid') {
     updateNonPaid(database, row, payment, payment.status)
     recordEvent(database, payment.status === 'failed' ? 'PAYMENT_FAILED' : 'PAYMENT_PENDING', studentUserId, { attemptId: row.public_id }, payment.status !== 'failed')
@@ -266,7 +266,33 @@ export async function verifyPayment(database, payload, studentUserId, paymentCon
   }
   const signatureVerifiedAt = new Date().toISOString()
   const payment = await provider.fetchPayment(paymentId)
+  if (payment.paymentId !== paymentId) return rejectMismatch(database, row, studentUserId, 'payment')
   return fulfillCapturedPayment(database, row, studentUserId, payment, signatureVerifiedAt)
+}
+
+export function handlePaymentWebhook(database, rawBody, signature, paymentConfig, provider) {
+  if (!paymentConfig.enabled || provider?.name !== 'razorpay') throw unavailable()
+  const payment = provider.parseWebhook(rawBody, signature)
+  if (!payment) return
+  const row = database.prepare(
+    "SELECT * FROM payment_attempts WHERE provider = ? AND provider_order_id = ?",
+  ).get(provider.name, payment.orderId)
+  // Unrelated merchant orders are acknowledged without exposing local state.
+  if (!row) return
+  if (payment.amountPaise !== row.amount_paise || payment.currency !== row.currency ||
+      !payment.captured || payment.status !== 'paid') {
+    throw new ApiError(400, 'webhook_payment_mismatch', 'Webhook payment does not match the stored attempt.')
+  }
+  const linked = database.prepare(
+    'SELECT id FROM payment_attempts WHERE provider = ? AND provider_payment_id = ?',
+  ).get(provider.name, payment.paymentId)
+  if ((linked && linked.id !== row.id) || (row.order_id && row.provider_payment_id !== payment.paymentId)) {
+    throw new ApiError(400, 'webhook_payment_mismatch', 'Webhook payment does not match the stored attempt.')
+  }
+  // Durable attempt/order uniqueness is the deduplication boundary, including
+  // different event IDs for the same capture and retries after process restart.
+  if (row.status === 'paid' && row.order_id) return
+  fulfillCapturedPayment(database, row, row.student_user_id, payment, new Date().toISOString())
 }
 
 export async function getPaymentStatus(database, attemptId, studentUserId, paymentConfig, provider) {

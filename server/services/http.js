@@ -6,7 +6,7 @@ export function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload))
 }
 
-export async function readJsonBody(request, maxBytes = 64 * 1024) {
+export async function readRawBody(request, maxBytes = 64 * 1024) {
   const chunks = []
   let size = 0
 
@@ -23,10 +23,15 @@ export async function readJsonBody(request, maxBytes = 64 * 1024) {
     chunks.push(chunk)
   }
 
-  if (chunks.length === 0) return {}
+  return Buffer.concat(chunks)
+}
+
+export async function readJsonBody(request, maxBytes = 64 * 1024) {
+  const body = await readRawBody(request, maxBytes)
+  if (body.length === 0) return {}
 
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    return JSON.parse(body.toString('utf8'))
   } catch {
     const error = new Error('Request body must contain valid JSON.')
     error.statusCode = 400

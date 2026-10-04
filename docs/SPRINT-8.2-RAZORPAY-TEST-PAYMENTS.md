@@ -55,12 +55,37 @@ account configuration must be confirmed in the Razorpay Dashboard.
 
 ## Webhooks
 
-The provider-neutral polling recovery path is implemented. A public webhook is
-not enabled in this localhost sprint: localhost cannot normally receive real
-Razorpay delivery, and no tunnel may be introduced without approval. Before
-deployment, add an idempotent raw-body webhook endpoint for `payment.captured`
-or `order.paid`, validate `X-Razorpay-Signature` with the dedicated webhook
-secret, and tolerate duplicate and out-of-order events.
+`POST /api/payments/webhook/razorpay` accepts `payment.captured` and `order.paid`
+events. The adapter verifies `X-Razorpay-Signature` with the dedicated
+`RAZORPAY_WEBHOOK_SECRET` against the exact raw bytes before parsing JSON.
+The route requires no student session and caps request bodies at 64 KiB. Missing
+webhook configuration returns 503; invalid signatures or capture payloads return
+400. Valid unsupported events and unrelated provider orders receive a generic
+200 acknowledgement. No personal data, payload, signature, or secret is returned
+or recorded by the webhook.
+
+Signed capture events must contain a captured payment with valid provider IDs,
+an integer amount and INR currency matching the stored trusted attempt. Fulfillment
+uses the stored student/cart and the existing SQLite transaction. Durable payment
+and order uniqueness deduplicates retries, including different event IDs and
+deliveries after restart; no schema migration or in-memory event cache is needed.
+`x-razorpay-event-id` is not used as an authorization or fulfillment key.
+Ignored failure/authorization events cannot downgrade paid attempts. A valid late
+capture can recover a failed, cancelled, or expired attempt. A payment already
+linked to another attempt is rejected; a paid attempt cannot switch payment IDs.
+Transaction failures remain retryable and do not acknowledge successful handling.
+
+Local synthetic tests cover signature validation, tampering, duplicates,
+out-of-order delivery, mismatch rejection, rollback, and route/body limits.
+Real delivery has not been tested. Localhost cannot normally receive Razorpay
+delivery, and no tunnel or deployment is introduced here. At deployment, subscribe
+the HTTPS endpoint to the supported events and configure the corresponding
+environment's secret. Preserve the old secret through any outstanding retry
+window when rotating secrets; this implementation accepts one configured secret.
+Existing Test Mode and production configuration gates remain in force.
+
+References: [Razorpay webhook validation](https://github.com/razorpay/markdown-docs/blob/master/webhooks/validate-test.md)
+and [payment event payloads](https://github.com/razorpay/markdown-docs/blob/master/webhooks/payments.md).
 
 ## Migration and security
 

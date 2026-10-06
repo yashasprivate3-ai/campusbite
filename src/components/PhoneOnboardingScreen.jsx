@@ -75,7 +75,7 @@ export function PhoneOnboardingScreen({ isCorrection, onCancel, onCompleted }) {
           <p>
             {isCorrection
               ? 'You can correct this number while it remains unverified.'
-              : 'Add your Indian mobile number to continue to the student ordering workspace.'}
+              : 'Add your Indian mobile number, then verify it on WhatsApp to continue.'}
           </p>
         </div>
 
@@ -112,8 +112,8 @@ export function PhoneOnboardingScreen({ isCorrection, onCancel, onCompleted }) {
           <div className="phone-unverified-note">
             <strong>Not verified yet</strong>
             <span>
-              After saving, request a one-time code from the Student workspace
-              to verify phone ownership before placing a new order.
+              After saving, we will send a one-time WhatsApp code to verify
+              phone ownership before opening the Student workspace.
             </span>
           </div>
 

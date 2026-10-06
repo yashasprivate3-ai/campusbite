@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../auth/useAuth.js'
 import {
   requestPhoneVerification,
@@ -15,8 +15,8 @@ function secondsUntil(timestamp, now) {
   return Math.max(0, Math.ceil((new Date(timestamp).getTime() - now) / 1000))
 }
 
-export function PhoneVerificationDialog({ onClose, onEditPhone, user }) {
-  const { refreshSession } = useAuth()
+export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoRequest = false, mandatory = false }) {
+  const { refreshSession, logout, isLoggingOut } = useAuth()
   const [challenge, setChallenge] = useState(null)
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
@@ -36,7 +36,7 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user }) {
   const maskedPhone = challenge?.maskedPhone || maskPhoneNumber(user.phoneNumber)
   const codeIsValid = /^\d{6}$/.test(code)
 
-  async function requestCode() {
+  const requestCode = useCallback(async () => {
     setIsRequesting(true)
     setError('')
     setMessage('')
@@ -56,13 +56,24 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user }) {
       if (requestError.details?.resendAvailableAt) {
         setChallenge((current) => ({
           ...(current || {}),
-          maskedPhone,
+          maskedPhone: maskPhoneNumber(user.phoneNumber),
           resendAvailableAt: requestError.details.resendAvailableAt,
         }))
       }
     } finally {
       setIsRequesting(false)
     }
+  }, [user.phoneNumber])
+
+  useEffect(() => {
+    if (!autoRequest) return
+    // Cleanup prevents StrictMode's initial effect replay from sending twice.
+    const timer = window.setTimeout(() => { void requestCode() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [autoRequest, requestCode])
+
+  async function handleLogout() {
+    try { await logout() } catch (requestError) { setError(requestError.message) }
   }
 
   async function verifyCode(event) {
@@ -75,7 +86,8 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user }) {
 
     try {
       await verifyPhoneVerification(code)
-      await refreshSession()
+      const refreshedUser = await refreshSession()
+      if (!refreshedUser?.phoneVerified) return
       setVerified(true)
       setCode('')
       setMessage('Phone verified. You can now place new orders.')
@@ -106,9 +118,15 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user }) {
               {verified ? 'Phone verified.' : 'Verify your phone.'}
             </h2>
           </div>
-          <button aria-label="Close phone verification" onClick={onClose} type="button">
-            ×
-          </button>
+          {mandatory ? (
+            <button disabled={isLoggingOut} onClick={handleLogout} type="button">
+              {isLoggingOut ? 'Signing out…' : 'Logout'}
+            </button>
+          ) : (
+            <button aria-label="Close phone verification" onClick={onClose} type="button">
+              ×
+            </button>
+          )}
         </div>
 
         {verified ? (
@@ -166,7 +184,7 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user }) {
                   <span>
                     {expiresSeconds > 0
                       ? `Expires in ${Math.ceil(expiresSeconds / 60)} min`
-                      : 'Code expired'}
+                      : challenge.expiresAt ? 'Code expired' : 'Enter the code already sent to your phone'}
                   </span>
                   <button
                     disabled={isRequesting || resendSeconds > 0}

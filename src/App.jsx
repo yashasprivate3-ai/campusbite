@@ -12,6 +12,7 @@ import { LoginScreen } from './components/LoginScreen'
 import { OrderTracking } from './components/OrderTracking'
 import { OrderTrackingState } from './components/OrderTrackingState'
 import { OwnerWorkspace } from './components/OwnerWorkspace'
+import { registrationStep } from './auth/registrationStep.js'
 import { PhoneOnboardingScreen } from './components/PhoneOnboardingScreen'
 import { PhoneVerificationDialog } from './components/PhoneVerificationDialog'
 import { SessionControls } from './components/SessionControls'
@@ -1222,12 +1223,26 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
 function AuthenticatedApp({ user }) {
   const [isEditingPhone, setIsEditingPhone] = useState(false)
 
-  if (user.onboardingRequired || isEditingPhone) {
+  const step = registrationStep(user)
+
+  if (step === 'phone' || isEditingPhone) {
     return (
       <PhoneOnboardingScreen
         isCorrection={isEditingPhone}
         onCancel={() => setIsEditingPhone(false)}
         onCompleted={() => setIsEditingPhone(false)}
+      />
+    )
+  }
+
+  if (step === 'verification') {
+    return (
+      <PhoneVerificationDialog
+        key={user.phoneNumber}
+        autoRequest
+        mandatory
+        onEditPhone={() => setIsEditingPhone(true)}
+        user={user}
       />
     )
   }

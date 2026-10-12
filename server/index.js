@@ -13,7 +13,10 @@ import {
 } from './services/http.js'
 import { LoginThrottle } from './services/loginThrottle.js'
 import { createPhoneVerificationProvider } from './services/phoneVerificationProvider.js'
+import { createCashfreeProvider } from './services/cashfreeProvider.js'
 import { createRazorpayProvider } from './services/razorpayProvider.js'
+
+const paymentProvider = createCashfreeProvider(serverConfig.payments) || createRazorpayProvider(serverConfig.payments)
 
 let database
 
@@ -47,7 +50,7 @@ const phoneVerificationProvider = createPhoneVerificationProvider(
   serverConfig.auth.otp,
   serverConfig.isProduction,
 )
-const paymentProvider = createRazorpayProvider(serverConfig.payments)
+
 
 const server = createServer(async (request, response) => {
   try {

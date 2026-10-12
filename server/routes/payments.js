@@ -38,13 +38,18 @@ export async function handlePaymentRoutes(
   paymentConfig,
   paymentProvider,
 ) {
-  if (requestUrl.pathname === '/api/payments/webhook/razorpay') {
+  if (['/api/payments/webhook/razorpay', '/api/payments/webhook/cashfree'].includes(requestUrl.pathname)) {
     if (request.method !== 'POST') {
       sendMethodNotAllowed(response, ['POST'])
       return true
     }
+    if (!requestUrl.pathname.endsWith(`/${paymentProvider?.name}`)) {
+      sendJson(response, 503, { error: 'Payment provider unavailable.' })
+      return true
+    }
     handlePaymentWebhook(database, await readRawBody(request),
-      request.headers['x-razorpay-signature'], paymentConfig, paymentProvider)
+      request.headers[paymentProvider.name === 'cashfree' ? 'x-webhook-signature' : 'x-razorpay-signature'],
+      paymentConfig, paymentProvider, request.headers['x-webhook-timestamp'])
     sendJson(response, 200, { received: true })
     return true
   }

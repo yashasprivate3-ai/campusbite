@@ -107,7 +107,7 @@ function isExpired(row) {
 }
 
 function unavailable() {
-  return new ApiError(503, 'payments_unavailable', 'Razorpay Test Mode is not configured on this CampusBite server.')
+  return new ApiError(503, 'payments_unavailable', 'Payments are not configured on this CampusBite server.')
 }
 
 function safeProviderResult(error) {
@@ -120,10 +120,12 @@ function safeProviderResult(error) {
 
 function checkoutResponse(row, database, provider, reused = false) {
   const response = { ...mapAttempt(row, database), reused }
-  if (ACTIVE_STATUSES.has(row.status) && !row.provider_order_id.startsWith('pending_')) {
+  if (ACTIVE_STATUSES.has(row.status) && row.provider === provider.name &&
+      !row.provider_order_id.startsWith('pending_') && (row.provider !== 'cashfree' || row.provider_session_id)) {
     response.checkout = provider.buildSafeCheckoutConfiguration({
       amountPaise: row.amount_paise,
       orderId: row.provider_order_id,
+      sessionId: row.provider_session_id,
     })
   }
   return response
@@ -148,33 +150,34 @@ export async function initiatePayment(database, payload, studentUserId, paymentC
 
   const now = new Date()
   const publicId = `pay_${randomUUID()}`
-  const placeholderOrderId = `pending_${randomUUID()}`
-  const expiresAt = new Date(now.getTime() + paymentConfig.razorpay.attemptLifetimeMinutes * 60_000)
+  const placeholderOrderId = paymentConfig.provider === 'cashfree' ? publicId : `pending_${randomUUID()}`
+  const expiresAt = new Date(now.getTime() + (paymentConfig.attemptLifetimeMinutes || paymentConfig.razorpay?.attemptLifetimeMinutes || 15) * 60_000)
   database.prepare(`INSERT INTO payment_attempts (
     public_id, student_user_id, provider, provider_order_id, amount_paise,
     currency, trusted_cart_json, checkout_details_json, request_fingerprint,
     idempotency_key, status, expires_at, created_at, updated_at
-  ) VALUES (?, ?, 'razorpay', ?, ?, 'INR', ?, ?, ?, ?, 'created', ?, ?, ?)`)
-    .run(publicId, studentUserId, placeholderOrderId, normalized.trustedCart.totalPaise,
+  ) VALUES (?, ?, ?, ?, ?, 'INR', ?, ?, ?, ?, 'created', ?, ?, ?)`)
+    .run(publicId, studentUserId, paymentConfig.provider, placeholderOrderId, normalized.trustedCart.totalPaise,
       JSON.stringify(normalized.trustedCart.items), JSON.stringify(normalized.checkoutDetails),
       normalized.fingerprint, normalized.idempotencyKey, expiresAt.toISOString(),
       now.toISOString(), now.toISOString())
-  recordEvent(database, 'PAYMENT_INITIATION_REQUESTED', studentUserId, { attemptId: publicId, provider: 'razorpay' })
+  recordEvent(database, 'PAYMENT_INITIATION_REQUESTED', studentUserId, { attemptId: publicId, provider: paymentConfig.provider })
 
   try {
     const created = await provider.createProviderOrder({
       amountPaise: normalized.trustedCart.totalPaise,
       attemptId: publicId,
+      phoneNumber: database.prepare('SELECT phone_number FROM users WHERE id = ?').get(studentUserId)?.phone_number,
     })
     if (created.amountPaise !== normalized.trustedCart.totalPaise || created.currency !== 'INR') {
       throw new PaymentProviderError('payment_gateway_mismatch', 'The payment service returned a mismatched order.')
     }
     const updatedAt = new Date().toISOString()
-    database.prepare(`UPDATE payment_attempts SET provider_order_id = ?, status = 'initiated',
+    database.prepare(`UPDATE payment_attempts SET provider_order_id = ?, provider_session_id = ?, status = 'initiated',
       initiated_at = ?, response_code = ?, response_message = ?, updated_at = ?
       WHERE public_id = ? AND status = 'created'`)
-      .run(created.orderId, updatedAt, created.providerCode, created.providerMessage, updatedAt, publicId)
-    recordEvent(database, 'PROVIDER_ORDER_CREATED', studentUserId, { attemptId: publicId, provider: 'razorpay' })
+      .run(created.orderId, created.sessionId || null, updatedAt, created.providerCode, created.providerMessage, updatedAt, publicId)
+    recordEvent(database, 'PROVIDER_ORDER_CREATED', studentUserId, { attemptId: publicId, provider: paymentConfig.provider })
     recordEvent(database, 'PAYMENT_INITIATION_SUCCEEDED', studentUserId, { attemptId: publicId })
   } catch (error) {
     const safe = safeProviderResult(error)
@@ -257,6 +260,11 @@ export async function verifyPayment(database, payload, studentUserId, paymentCon
     recordEvent(database, 'PAYMENT_VERIFICATION_IDEMPOTENT', studentUserId, { attemptId: row.public_id })
     return mapAttempt(row, database)
   }
+  if (row.provider !== provider.name) throw unavailable()
+  if (provider.name === 'cashfree') {
+    const payment = await provider.fetchProviderStatus(row.provider_order_id)
+    return payment ? fulfillCapturedPayment(database, row, studentUserId, payment) : mapAttempt(row, database)
+  }
   const paymentId = requireString(payload.razorpay_payment_id, 'razorpay_payment_id', { maxLength: 100 })
   const returnedOrderId = requireString(payload.razorpay_order_id, 'razorpay_order_id', { maxLength: 100 })
   const signature = requireString(payload.razorpay_signature, 'razorpay_signature', { maxLength: 128 })
@@ -270,9 +278,9 @@ export async function verifyPayment(database, payload, studentUserId, paymentCon
   return fulfillCapturedPayment(database, row, studentUserId, payment, signatureVerifiedAt)
 }
 
-export function handlePaymentWebhook(database, rawBody, signature, paymentConfig, provider) {
-  if (!paymentConfig.enabled || provider?.name !== 'razorpay') throw unavailable()
-  const payment = provider.parseWebhook(rawBody, signature)
+export function handlePaymentWebhook(database, rawBody, signature, paymentConfig, provider, timestamp) {
+  if (!paymentConfig.enabled || !['razorpay', 'cashfree'].includes(provider?.name)) throw unavailable()
+  const payment = provider.parseWebhook(rawBody, signature, timestamp)
   if (!payment) return
   const row = database.prepare(
     "SELECT * FROM payment_attempts WHERE provider = ? AND provider_order_id = ?",
@@ -297,12 +305,13 @@ export function handlePaymentWebhook(database, rawBody, signature, paymentConfig
 
 export async function getPaymentStatus(database, attemptId, studentUserId, paymentConfig, provider) {
   const row = requireOwnedAttempt(database, attemptId, studentUserId)
-  if (!ACTIVE_STATUSES.has(row.status) || TERMINAL_STATUSES.has(row.status)) return mapAttempt(row, database)
+  if (row.status === 'paid' || (row.provider !== 'cashfree' && (!ACTIVE_STATUSES.has(row.status) || TERMINAL_STATUSES.has(row.status)))) return mapAttempt(row, database)
   if (!paymentConfig.enabled || !provider) throw unavailable()
-  if (isExpired(row)) {
+  if (isExpired(row) && row.provider !== 'cashfree') {
     updateNonPaid(database, row, null, 'expired')
     return mapAttempt(selectAttempt(database, row.public_id), database)
   }
+  if (row.provider !== provider.name) throw unavailable()
   const payment = await provider.fetchProviderStatus(row.provider_order_id)
   if (!payment) {
     recordEvent(database, 'PAYMENT_PENDING', studentUserId, { attemptId: row.public_id })

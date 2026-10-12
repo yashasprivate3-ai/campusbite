@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 7
+const SCHEMA_VERSION = 8
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -350,6 +350,19 @@ function migrateToVersion7(database) {
   `)
 }
 
+function migrateToVersion8(database) {
+  // Widen the provider CHECK while preserving all rows and uniqueness constraints.
+  const schema = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'payment_attempts'").get().sql
+  database.exec(schema.replace(/CREATE TABLE "?payment_attempts"?/, 'CREATE TABLE payment_attempts_v8')
+    .replace("'paytm', 'razorpay'", "'paytm', 'razorpay', 'cashfree'"))
+  database.exec(`INSERT INTO payment_attempts_v8 SELECT * FROM payment_attempts;
+    DROP TABLE payment_attempts;
+    ALTER TABLE payment_attempts_v8 RENAME TO payment_attempts;
+    ALTER TABLE payment_attempts ADD COLUMN provider_session_id TEXT;
+    CREATE INDEX idx_payment_attempts_student_created ON payment_attempts(student_user_id, created_at);
+    CREATE INDEX idx_payment_attempts_status ON payment_attempts(status, updated_at);`)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -395,6 +408,8 @@ export function initializeDatabase(databasePath) {
     if (currentVersion < 7) {
       migrateToVersion7(database)
     }
+
+    if (currentVersion < 8) migrateToVersion8(database)
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
     database.exec('COMMIT;')

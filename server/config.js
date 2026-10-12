@@ -84,8 +84,8 @@ function readDevelopmentOtpCode(value, provider) {
 function readPaymentProvider(value) {
   const provider = String(value || 'disabled').trim().toLowerCase()
 
-  if (!['disabled', 'razorpay'].includes(provider)) {
-    throw new Error('CAMPUSBITE_PAYMENT_PROVIDER must be disabled or razorpay.')
+  if (!['disabled', 'razorpay', 'cashfree'].includes(provider)) {
+    throw new Error('CAMPUSBITE_PAYMENT_PROVIDER must be disabled, razorpay or cashfree.')
   }
 
   return provider
@@ -101,7 +101,7 @@ function requirePaymentValue(value, label, provider) {
 
 function readPublicAppUrl(value, provider) {
   const normalized = String(value || '').trim()
-  if (provider !== 'razorpay' && !normalized) return 'http://localhost:5173'
+  if (provider === 'disabled' && !normalized) return 'http://localhost:5173'
 
   let parsed
   try {
@@ -184,11 +184,17 @@ export const serverConfig = Object.freeze({
   isProduction,
   payments: Object.freeze({
     provider: paymentProvider,
-    enabled: paymentProvider === 'razorpay',
+    enabled: paymentProvider !== 'disabled',
     publicAppUrl: readPublicAppUrl(
       process.env.CAMPUSBITE_PUBLIC_APP_URL,
       paymentProvider,
     ),
+    cashfree: Object.freeze({
+      environment: process.env.CASHFREE_ENVIRONMENT || 'sandbox',
+      clientId: (process.env.CASHFREE_ENVIRONMENT === 'production' ? process.env.CASHFREE_PRODUCTION_CLIENT_ID : process.env.CASHFREE_SANDBOX_CLIENT_ID) || '',
+      clientSecret: (process.env.CASHFREE_ENVIRONMENT === 'production' ? process.env.CASHFREE_PRODUCTION_CLIENT_SECRET : process.env.CASHFREE_SANDBOX_CLIENT_SECRET) || '',
+      livePaymentsApproved: readBoolean(process.env.CAMPUSBITE_LIVE_PAYMENTS_APPROVED),
+    }),
     razorpay: Object.freeze({
       environment: razorpayEnvironment,
       keyId: razorpayKeyId,

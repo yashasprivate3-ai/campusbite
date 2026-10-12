@@ -23,7 +23,7 @@ import {
   initiatePayment,
   verifyPayment,
 } from './services/paymentsApi'
-import { openRazorpayCheckout } from './services/razorpayCheckout'
+import { openPaymentCheckout } from './services/paymentCheckout'
 import {
   buildKitchenActivity,
   completeBatchRecord,
@@ -518,7 +518,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
 
         if (attempt.status === 'pending' || attempt.status === 'initiated') {
           setPaymentMessage(
-            'Razorpay has not confirmed this payment yet. No Kitchen order has been created.',
+            'The payment provider has not confirmed this payment yet. No Kitchen order has been created.',
           )
         } else {
           setPaymentMessage(
@@ -653,7 +653,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
       : getPaymentStatus(attemptId)
     paymentConfirmationRequest.current = request
     setPaymentStatus('checking')
-    setPaymentMessage('CampusBite is verifying the payment with Razorpay…')
+    setPaymentMessage('CampusBite is verifying the payment with the payment provider…')
 
     try {
       const attempt = await request
@@ -664,7 +664,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
         applyConfirmedPayment(attempt)
       } else if (attempt.status === 'pending' || attempt.status === 'initiated') {
         setPaymentMessage(
-          'Payment is still pending at Razorpay. No Kitchen order has been created yet.',
+          attempt.responseMessage || 'Payment is still pending. No Kitchen order has been created yet.',
         )
       } else {
         setPaymentMessage(
@@ -723,14 +723,14 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
 
       if (!attempt.checkout) {
         setPaymentMessage(
-          'This payment is awaiting a Razorpay status check. No Kitchen order has been created.',
+          'This payment is awaiting a payment status check. No Kitchen order has been created.',
         )
         return
       }
 
       setPaymentMessage(`CampusBite verified the total as ₹${attempt.amount}.`)
       setPaymentStatus('checkout-open')
-      await openRazorpayCheckout(attempt.checkout, {
+      await openPaymentCheckout(attempt.checkout, {
         onSuccess: (checkoutResult) => {
           verifyPaymentWithBackend(attempt.attemptId, checkoutResult).catch(() => {})
         },
@@ -739,7 +739,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
             .then((checkedAttempt) => {
               if (['pending', 'initiated'].includes(checkedAttempt.status)) {
                 setPaymentMessage(
-                  'Razorpay Checkout was closed. Payment is unconfirmed, so no Kitchen order was created.',
+                  'Checkout was closed. Payment is unconfirmed, so no Kitchen order was created.',
                 )
               }
             })
@@ -1083,7 +1083,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                 <div className="cart-summary">
                   <div><span>Item total</span><strong>₹{cartTotal}</strong></div>
                   <button className="clear-cart-button" type="button" onClick={clearCart}>Clear cart</button>
-                  <p>Your final total is verified by CampusBite before Razorpay Checkout opens.</p>
+                  <p>Your final total is verified by CampusBite before secure checkout opens.</p>
                   <button className="checkout-button" type="button" onClick={openCheckout}>
                     Continue to checkout · ₹{cartTotal}
                   </button>
@@ -1135,7 +1135,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
             {checkoutStep === 'review' && (
               <div className="checkout-content">
                 <p className="eyebrow">Final check</p><h1>Review your order</h1>
-                <p className="checkout-intro">Confirm the items and pickup timing before paying securely through Razorpay Test Mode.</p>
+                <p className="checkout-intro">Confirm the items and pickup timing before paying securely through the payment provider.</p>
                 <div className="review-card">
                   {cartItems.map((item) => (
                     <div className="review-row" key={item.id}><span>{item.emoji}</span><div><strong>{item.name}</strong><small>Quantity {cart[item.id]}</small></div><strong>₹{item.price * cart[item.id]}</strong></div>
@@ -1144,8 +1144,8 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                 </div>
                 <div className="pickup-summary"><span>Pickup</span><strong>{pickupMethod === 'scheduled' ? pickupSlot : 'As soon as ready'}</strong>{instructions.trim() && <small>Note: {instructions.trim()}</small>}</div>
                 <div className="payment-safety-notice">
-                  <strong>Razorpay Test Mode · UPI preferred</strong>
-                  <span>No order reaches the Kitchen until CampusBite verifies a captured payment directly with Razorpay.</span>
+                  <strong>Secure payment · UPI where available</strong>
+                  <span>No order reaches the Kitchen until CampusBite verifies a captured payment directly with the payment provider.</span>
                 </div>
                 {!user.phoneVerified && (
                   <div className="phone-verification-review-notice" role="status">
@@ -1171,7 +1171,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                   disabled={isSubmittingOrder}
                 >
                   {isSubmittingOrder
-                    ? 'Connecting securely to Razorpay…'
+                    ? 'Connecting securely to the payment provider…'
                     : user.phoneVerified
                       ? `Pay securely with UPI · ₹${cartTotal}`
                       : 'Verify phone to place order'}

@@ -167,6 +167,7 @@ function payload(idempotencyKey = 'request-0001') {
 function provider(overrides = {}) {
   let orderCount = 0
   return {
+    name: 'razorpay',
     async createProviderOrder({ amountPaise }) {
       orderCount += 1
       return {

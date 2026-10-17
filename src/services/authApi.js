@@ -26,10 +26,10 @@ export async function loginWithGoogleCredential(credential) {
   return response.user
 }
 
-export async function saveStudentPhone(phoneNumber) {
+export async function saveStudentPhone(phoneNumber, details = {}) {
   const response = await apiRequest('/api/auth/profile/phone', {
     method: 'PATCH',
-    body: JSON.stringify({ phoneNumber }),
+    body: JSON.stringify({ ...details, phoneNumber }),
   })
   return response.user
 }

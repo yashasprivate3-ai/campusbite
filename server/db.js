@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 10
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -363,6 +363,28 @@ function migrateToVersion8(database) {
     CREATE INDEX idx_payment_attempts_status ON payment_attempts(status, updated_at);`)
 }
 
+function migrateToVersion9(database) {
+  // Existing rows remain exempt; new Google registrations opt into details.
+  addColumnIfMissing(database, 'users', 'course', 'TEXT')
+  addColumnIfMissing(database, 'users', 'student_class', 'TEXT')
+  addColumnIfMissing(database, 'users', 'student_profile_required', 'INTEGER NOT NULL DEFAULT 0 CHECK (student_profile_required IN (0, 1))')
+}
+
+function migrateToVersion10(database) {
+  // No fabricated inventory: approved remaining quantities must be supplied privately.
+  database.exec(`CREATE TABLE IF NOT EXISTS daily_menu_stock (
+    service_date TEXT NOT NULL, menu_item_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL CHECK (quantity >= 0),
+    PRIMARY KEY (service_date, menu_item_id)
+  );
+  CREATE TABLE IF NOT EXISTS stock_reservations (
+    attempt_id INTEGER NOT NULL REFERENCES payment_attempts(id),
+    service_date TEXT NOT NULL, menu_item_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (attempt_id, menu_item_id)
+  );`)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -410,6 +432,8 @@ export function initializeDatabase(databasePath) {
     }
 
     if (currentVersion < 8) migrateToVersion8(database)
+    if (currentVersion < 9) migrateToVersion9(database)
+    if (currentVersion < 10) migrateToVersion10(database)
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
     database.exec('COMMIT;')

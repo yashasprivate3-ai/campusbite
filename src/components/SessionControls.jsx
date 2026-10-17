@@ -47,7 +47,7 @@ export function SessionControls({
       )}
       {onEditPhone && (
         <button type="button" onClick={onEditPhone}>
-          Edit phone
+          {user.profileDetailsMissing ? 'Complete profile' : 'Edit phone'}
         </button>
       )}
       <button disabled={isLoggingOut} type="button" onClick={handleLogout}>

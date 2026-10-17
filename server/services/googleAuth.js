@@ -223,9 +223,9 @@ export function resolveGoogleStudent(database, verifiedIdentity) {
     const userResult = database
       .prepare(
         `INSERT INTO users (
-           public_id, role, display_name, email, phone_verified,
+           public_id, role, display_name, email, phone_verified, student_profile_required,
            profile_picture_url, email_verified, status, last_login_at
-         ) VALUES (?, 'STUDENT', ?, ?, 0, ?, 1, 'ACTIVE', ?)`,
+         ) VALUES (?, 'STUDENT', ?, ?, 0, 1, ?, 1, 'ACTIVE', ?)`,
       )
       .run(
         `usr_${randomUUID()}`,

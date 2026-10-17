@@ -46,6 +46,10 @@ export function mapSafeUser(row) {
     publicId: row.public_id,
     role: row.role,
     displayName: row.display_name,
+    course: row.course || null,
+    studentClass: row.student_class || null,
+    profileDetailsMissing: row.role === 'STUDENT' && (!row.course || !row.student_class),
+    profileDetailsRequired: row.role === 'STUDENT' && Boolean(row.student_profile_required) && (!row.course || !row.student_class),
     email: row.email,
     phoneNumber: row.phone_number,
     phoneVerified: Boolean(row.phone_verified),
@@ -54,7 +58,7 @@ export function mapSafeUser(row) {
     emailVerified: Boolean(row.email_verified),
     googleLinked,
     onboardingRequired:
-      row.role === 'STUDENT' && googleLinked && !row.phone_number,
+      row.role === 'STUDENT' && ((googleLinked && !row.phone_number) || (Boolean(row.student_profile_required) && (!row.course || !row.student_class))),
     status: row.status,
     lastLoginAt: normalizeTimestamp(row.last_login_at),
     onboardingCompletedAt: normalizeTimestamp(row.onboarding_completed_at),
@@ -99,7 +103,7 @@ function findLocalIdentity(database, identifier) {
     .prepare(
       `SELECT ai.id AS identity_id, ai.password_hash,
               u.id AS user_id, u.public_id, u.role, u.display_name,
-              u.email, u.phone_number, u.phone_verified, u.phone_verified_at,
+              u.email, u.course, u.student_class, u.student_profile_required, u.phone_number, u.phone_verified, u.phone_verified_at,
               u.profile_picture_url, u.email_verified, u.last_login_at,
               u.onboarding_completed_at, u.status,
               EXISTS (
@@ -294,7 +298,7 @@ function findSession(database, tokenHash) {
     .prepare(
       `SELECT s.id AS session_id, s.user_id, s.expires_at, s.last_used_at,
               s.revoked_at, u.public_id, u.role, u.display_name, u.email,
-              u.phone_number, u.phone_verified, u.phone_verified_at,
+              u.course, u.student_class, u.student_profile_required, u.phone_number, u.phone_verified, u.phone_verified_at,
               u.profile_picture_url,
               u.email_verified, u.last_login_at, u.onboarding_completed_at,
               u.status,
@@ -316,7 +320,7 @@ export function getSafeUserById(database, userId) {
   const row = database
     .prepare(
       `SELECT u.id AS user_id, u.public_id, u.role, u.display_name, u.email,
-              u.phone_number, u.phone_verified, u.phone_verified_at,
+              u.course, u.student_class, u.student_profile_required, u.phone_number, u.phone_verified, u.phone_verified_at,
               u.profile_picture_url,
               u.email_verified, u.last_login_at, u.onboarding_completed_at,
               u.status, u.created_at AS user_created_at,

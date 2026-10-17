@@ -25,5 +25,9 @@ export function createPhoneVerificationProvider(config, isProduction) {
     return createDevelopmentProvider(providerConfig)
   }
 
-  return createMetaWhatsAppProvider(providerConfig.metaWhatsApp)
+  if (config.provider === 'meta-whatsapp') {
+    return createMetaWhatsAppProvider(providerConfig.metaWhatsApp)
+  }
+
+  throw new Error('MSG91 OTP integration is not enabled yet.')
 }

@@ -1,3 +1,4 @@
+import { requireGoogleJsonRequest } from '../services/googleRequest.js'
 import {
   authenticateLocalUser,
   createClearSessionCookie,
@@ -95,6 +96,7 @@ export async function handleAuthRoutes(
       return true
     }
 
+    requireGoogleJsonRequest(request)
     const throttleKey = loginThrottle.assertAllowed(request, 'google')
 
     try {

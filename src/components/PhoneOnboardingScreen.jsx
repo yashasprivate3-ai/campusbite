@@ -23,13 +23,18 @@ export function PhoneOnboardingScreen({ isCorrection, onCancel, onCompleted }) {
   const [phoneNumber, setPhoneNumber] = useState(() =>
     user.phoneNumber?.replace(/^\+91/, '') || '',
   )
+  const [course, setCourse] = useState(user.course || '')
+  const [studentClass, setStudentClass] = useState(user.studentClass || '')
+  const detailsAreValid = Boolean(course.trim() && studentClass.trim())
+  const isProfileCompletion = user.phoneVerified && user.profileDetailsMissing
+  const phoneWillRemainVerified = user.phoneVerified && user.phoneNumber === '+91' + phoneNumber
   const phoneIsValid = /^[6-9]\d{9}$/.test(phoneNumber)
 
   async function handleSubmit(event) {
     event.preventDefault()
 
     try {
-      await completePhoneOnboarding(phoneNumber)
+      await completePhoneOnboarding(phoneNumber, { course, studentClass })
       onCompleted?.()
     } catch {
       // The central authentication layer exposes the safe validation error.
@@ -63,17 +68,19 @@ export function PhoneOnboardingScreen({ isCorrection, onCancel, onCompleted }) {
             <span aria-hidden="true">{getInitials(user.displayName)}</span>
           )}
           <div>
-            <small>Google account connected</small>
+            <small>{user.googleLinked === false ? 'Student account' : 'Google account connected'}</small>
             <strong>{user.displayName}</strong>
             <span>{user.email}</span>
           </div>
         </div>
 
         <div className="onboarding-copy">
-          <p className="eyebrow">Compulsory phone onboarding</p>
-          <h1>{isCorrection ? 'Correct your phone number.' : `Welcome, ${user.displayName}.`}</h1>
+          <p className="eyebrow">{isProfileCompletion ? 'Student details' : 'Compulsory phone onboarding'}</p>
+          <h1>{isProfileCompletion ? 'Complete your profile.' : isCorrection ? 'Correct your phone number.' : `Welcome, ${user.displayName}.`}</h1>
           <p>
-            {isCorrection
+            {isProfileCompletion
+              ? 'Add your course and class to complete your profile.'
+              : isCorrection
               ? 'You can correct this number while it remains unverified.'
               : 'Add your Indian mobile number, then verify it on WhatsApp to continue.'}
           </p>
@@ -86,6 +93,16 @@ export function PhoneOnboardingScreen({ isCorrection, onCancel, onCompleted }) {
         )}
 
         <form className="phone-onboarding-form" onSubmit={handleSubmit}>
+          <label htmlFor="student-course">Course</label>
+          <div className="phone-input-shell student-detail-input">
+            <input id="student-course" autoComplete="off" maxLength={80} required
+              value={course} onChange={(event) => setCourse(event.target.value)} />
+          </div>
+          <label htmlFor="student-class">Class</label>
+          <div className="phone-input-shell student-detail-input">
+            <input id="student-class" autoComplete="off" maxLength={80} required
+              value={studentClass} onChange={(event) => setStudentClass(event.target.value)} />
+          </div>
           <label htmlFor="student-phone">Mobile number</label>
           <div className="phone-input-shell">
             <span>+91</span>
@@ -109,21 +126,23 @@ export function PhoneOnboardingScreen({ isCorrection, onCancel, onCompleted }) {
             </span>
           )}
 
-          <div className="phone-unverified-note">
+          {!phoneWillRemainVerified && <div className="phone-unverified-note">
             <strong>Not verified yet</strong>
             <span>
               After saving, we will send a one-time WhatsApp code to verify
               phone ownership before opening the Student workspace.
             </span>
-          </div>
+          </div>}
 
           <button
             className="login-submit"
-            disabled={isCompletingOnboarding || !phoneIsValid}
+            disabled={isCompletingOnboarding || !phoneIsValid || !detailsAreValid}
             type="submit"
           >
             {isCompletingOnboarding
               ? 'Saving securely…'
+              : user.profileDetailsMissing
+                ? 'Save details and continue'
               : isCorrection
                 ? 'Save corrected number'
                 : 'Save number and continue'}

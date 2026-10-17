@@ -18,7 +18,7 @@ test('new Google registration moves from phone to verification, and only verifie
     const { internalUserId, user } = resolveGoogleStudent(database, identity)
     assert.equal(registrationStep(user), 'phone')
     assert.throws(() => requireStudentPhoneVerified({ user }), { code: 'phone_onboarding_required' })
-    const saved = updateStudentPhone(database, internalUserId, { phoneNumber: '9000000021' })
+    const saved = updateStudentPhone(database, internalUserId, { course: 'BSc', studentClass: 'Year 1 A', phoneNumber: '9000000021' })
     assert.equal(saved.onboardingRequired, false)
     assert.equal(saved.phoneVerified, false)
     assert.equal(registrationStep(saved), 'verification')

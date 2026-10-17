@@ -51,9 +51,9 @@ function readCookieName(value) {
 function readOtpProvider(value) {
   const provider = String(value || 'development').trim().toLowerCase()
 
-  if (!['development', 'meta-whatsapp'].includes(provider)) {
+  if (!['development', 'meta-whatsapp', 'msg91'].includes(provider)) {
     throw new Error(
-      'CAMPUSBITE_OTP_PROVIDER must be development or meta-whatsapp.',
+      'CAMPUSBITE_OTP_PROVIDER must be development, meta-whatsapp, or msg91.',
     )
   }
 

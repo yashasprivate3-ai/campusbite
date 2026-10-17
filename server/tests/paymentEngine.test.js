@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+const orderingClock = () => new Date('2099-10-17T06:30:00Z')
+function seedStock(db) { for (let id = 1; id <= 6; id++) db.prepare('INSERT OR IGNORE INTO daily_menu_stock (service_date, menu_item_id, quantity) VALUES (?, ?, ?)').run('2099-10-17', id, 1000) }
 import { afterEach, test } from 'node:test'
 import { initializeDatabase } from '../db.js'
 import { buildTrustedCartSnapshot } from '../data/menu.js'
@@ -16,13 +18,14 @@ import { createRazorpayProvider } from '../services/razorpayProvider.js'
 
 const databases = []
 const paymentConfig = {
-  enabled: true,
+  orderingClock, enabled: true,
   provider: 'razorpay',
   razorpay: { attemptLifetimeMinutes: 15 },
 }
 
 function createDatabase() {
   const database = initializeDatabase(':memory:')
+  seedStock(database)
   databases.push(database)
   database.prepare(`INSERT INTO users
     (public_id, role, display_name, phone_number, phone_verified, status)

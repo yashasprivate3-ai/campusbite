@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict'
+const orderingClock = () => new Date('2099-10-17T06:30:00Z')
+function seedStock(db) { for (let id = 1; id <= 6; id++) db.prepare('INSERT OR IGNORE INTO daily_menu_stock (service_date, menu_item_id, quantity) VALUES (?, ?, ?)').run('2099-10-17', id, 1000) }
 import { test } from 'node:test'
 import { createHmac } from 'node:crypto'
-import { initializeDatabase } from '../db.js'
+import { initializeDatabase, SCHEMA_VERSION } from '../db.js'
 import { createCashfreeProvider } from '../services/cashfreeProvider.js'
 import { initiatePayment, verifyPayment, handlePaymentWebhook, getPaymentStatus } from '../services/payments.js'
 
-const config = { enabled: true, provider: 'cashfree', publicAppUrl: 'https://example.com',
+const config = { orderingClock, enabled: true, provider: 'cashfree', publicAppUrl: 'https://example.com',
   cashfree: { environment: 'sandbox', clientId: 'synthetic-id', clientSecret: 'synthetic-secret' } }
 const cart = { idempotencyKey: 'cashfree-test-1', items: [{ menuItemId: 1, quantity: 2 }], pickupMethod: 'asap' }
 function setup(t, overrides = {}) {
   const db = initializeDatabase(':memory:')
+  seedStock(db)
   t.after(() => db.close())
   db.prepare(`INSERT INTO users (public_id, role, display_name, phone_number, phone_verified, status)
     VALUES ('cf-student', 'STUDENT', 'Test', '+919000000001', 1, 'ACTIVE')`).run()
@@ -182,7 +185,7 @@ test('schema 7 upgrade preserves existing paid records and relationships', (t) =
     assert.deepEqual(after, before)
     assert.equal(db.prepare('SELECT token FROM orders WHERE id=1').get().token, 'old-token')
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8)
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION)
   } finally { db.close() }
 })
 

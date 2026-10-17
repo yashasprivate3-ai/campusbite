@@ -119,7 +119,7 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
             </h2>
           </div>
           {mandatory ? (
-            <button disabled={isLoggingOut} onClick={handleLogout} type="button">
+            <button className="phone-verification-logout" disabled={isLoggingOut} onClick={handleLogout} type="button">
               {isLoggingOut ? 'Signing out…' : 'Logout'}
             </button>
           ) : (

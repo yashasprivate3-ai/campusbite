@@ -1,44 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-const GOOGLE_SCRIPT_ID = 'campusbite-google-identity-services'
-const GOOGLE_SCRIPT_URL = 'https://accounts.google.com/gsi/client'
+import { loadGoogleIdentityServices } from '../services/googleIdentityScript.js'
 
-let googleScriptPromise
 let initializedClientId
 let activeCredentialHandler
-
-function loadGoogleIdentityServices() {
-  if (window.google?.accounts?.id) return Promise.resolve(window.google)
-  if (googleScriptPromise) return googleScriptPromise
-
-  googleScriptPromise = new Promise((resolve, reject) => {
-    const existingScript = document.getElementById(GOOGLE_SCRIPT_ID)
-    const script = existingScript || document.createElement('script')
-
-    function handleLoad() {
-      if (window.google?.accounts?.id) resolve(window.google)
-      else reject(new Error('Google Identity Services did not initialize.'))
-    }
-
-    function handleError() {
-      googleScriptPromise = undefined
-      reject(new Error('Google Identity Services could not be loaded.'))
-    }
-
-    script.addEventListener('load', handleLoad, { once: true })
-    script.addEventListener('error', handleError, { once: true })
-
-    if (!existingScript) {
-      script.id = GOOGLE_SCRIPT_ID
-      script.src = GOOGLE_SCRIPT_URL
-      script.async = true
-      script.defer = true
-      document.head.appendChild(script)
-    }
-  })
-
-  return googleScriptPromise
-}
 
 function initializeGoogleIdentity(google, clientId) {
   if (initializedClientId && initializedClientId !== clientId) {

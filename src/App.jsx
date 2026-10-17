@@ -1,3 +1,7 @@
+import { pickupWindows } from '../shared/pickupPolicy.js'
+import { sanitizeCart } from './utils/cartState.js'
+import { useMenuAvailability } from './hooks/useMenuAvailability.js'
+import { itemStatus } from '../shared/batchPolicy.js'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { useAuth } from './auth/useAuth'
@@ -46,7 +50,6 @@ const menuItems = [
 ]
 
 const categories = ['All', 'Ready now', 'Meals', 'Snacks', 'Beverages']
-const pickupSlots = ['12:00 PM - 12:15 PM', '12:15 PM - 12:30 PM', '12:30 PM - 12:45 PM', '1:00 PM - 1:15 PM']
 
 const KITCHEN_BATCHES_KEY = 'campusbite-kitchen-batches'
 const STUDENT_CART_KEY_PREFIX = 'campusbite-student-cart'
@@ -79,16 +82,8 @@ function getStudentStorageKey(prefix, publicId) {
 
 function loadStudentCart(publicId) {
   try {
-    return (
-      JSON.parse(
-        localStorage.getItem(
-          getStudentStorageKey(STUDENT_CART_KEY_PREFIX, publicId),
-        ),
-      ) || {}
-    )
-  } catch {
-    return {}
-  }
+    return sanitizeCart(JSON.parse(localStorage.getItem(getStudentStorageKey(STUDENT_CART_KEY_PREFIX, publicId))), menuItems.map(item => item.id))
+  } catch { return {} }
 }
 
 function loadTrackedOrderId(publicId) {
@@ -202,11 +197,11 @@ function KitchenDashboard({
         .map((token) => orders.find((order) => order.token === token))
         .filter(Boolean)
       const isPreparing = linkedOrders.some(
-        (order) => order.status === 'preparing',
+        (order) => itemStatus(order, batch.itemName) === 'preparing',
       )
       const activeRecord = findActiveBatchRecord(batch, batchRecords)
       const startedAt = getBatchStartedAt(batch, linkedOrders, batchRecords)
-      const priority = priorities[batch.itemName]
+      const priority = priorities[batch.batchKey]
       const isPriority =
         priority?.highVolume || priority?.longestWait
 
@@ -218,6 +213,7 @@ function KitchenDashboard({
           <strong>{batch.requiredQuantity}</strong>
           <span>{batch.itemName}</span>
           <small>{batch.linkedOrders.length} orders linked</small>
+          <small>{batch.pickupSlot || 'ASAP pickup'}{batch.instructions ? ' · ' + batch.instructions : ''}</small>
 
           <div
             className={`batch-status ${isPreparing ? 'preparing' : 'ready-to-start'}`}
@@ -398,8 +394,17 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [checkoutStep, setCheckoutStep] = useState(null)
   const [pickupMethod, setPickupMethod] = useState('asap')
-  const [pickupSlot, setPickupSlot] = useState(pickupSlots[0])
+  const [pickupSlot, setPickupSlot] = useState(() => pickupWindows().find(slot => slot.eligible)?.value || '')
+  const [menuIntent, setMenuIntent] = useState('now')
   const [instructions, setInstructions] = useState('')
+  const liveMenu = useMenuAvailability(user.role === 'STUDENT', pickupMethod, pickupSlot)
+  const pickupSlots = (liveMenu?.menu?.slots || pickupWindows()).filter(slot => slot.eligible).map(slot => slot.value)
+  const nextBreak = (liveMenu?.menu?.slots || pickupWindows()).find(slot => new Date(slot.value.slice(0, 10) + 'T' + String(Math.floor(slot.start / 60)).padStart(2, '0') + ':' + String(slot.start % 60).padStart(2, '0') + ':00+05:30') > new Date())
+  function chooseMenuIntent(intent) {
+    setMenuIntent(intent)
+    setPickupMethod(intent === 'now' ? 'asap' : 'scheduled')
+    if (intent !== 'now') setPickupSlot(intent === 'break' ? nextBreak?.value || '' : pickupSlots[0] || '')
+  }
   const [confirmedOrder, setConfirmedOrder] = useState(null)
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
   const [orderSubmitError, setOrderSubmitError] = useState('')
@@ -595,12 +600,15 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
       })
   }, [canUseKitchen, kitchenBatches, kitchenOrders, updateKitchenOrderStatus])
 
-  const visibleItems = activeCategory === 'All' ? menuItems : menuItems.filter((item) => item.category === activeCategory)
+  const menuWithAvailability = menuItems.map(item => ({ ...item, live: liveMenu?.menu?.items.find(candidate => candidate.id === item.id) }))
+  const visibleItems = menuWithAvailability.filter(item => activeCategory === 'All' || (activeCategory === 'Ready now' ? item.live?.preparationMinutes === 0 : item.category === activeCategory))
   const cartItems = menuItems.filter((item) => cart[item.id])
   const cartCount = cartItems.reduce((total, item) => total + cart[item.id], 0)
   const cartTotal = cartItems.reduce((total, item) => total + item.price * cart[item.id], 0)
   function addItem(itemId) {
-    setCart((currentCart) => ({ ...currentCart, [itemId]: (currentCart[itemId] || 0) + 1 }))
+    const live = menuWithAvailability.find(item => item.id === itemId)?.live
+    if (!live?.available) return
+    setCart((currentCart) => ({ ...currentCart, [itemId]: Math.min(20, live.remaining, (currentCart[itemId] || 0) + 1) }))
   }
 
   function removeItem(itemId) {
@@ -639,7 +647,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
     setPaymentMessage('Payment confirmed. Your order is now in the Kitchen queue.')
     checkoutRequestId.current = null
     setPickupMethod('asap')
-    setPickupSlot(pickupSlots[0])
+    setPickupSlot(pickupSlots[0] || '')
     setInstructions('')
   }
 
@@ -779,8 +787,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
     const batchSnapshot = createBatchSnapshot(batch, kitchenOrders, 'new')
     const linkedOrders = kitchenOrders.filter(
       (order) =>
-        batchSnapshot.linkedOrders.includes(order.token) &&
-        order.status === 'new',
+        batchSnapshot.linkedOrders.includes(order.token),
     )
 
     if (linkedOrders.length === 0) return
@@ -800,7 +807,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
       const startedAt =
         updatedOrders[0].statusHistory.at(-1)?.at || new Date().toISOString()
       setKitchenBatches((records) =>
-        startBatchRecord(records, batchSnapshot, startedAt),
+        startBatchRecord(records, createBatchSnapshot(batch, updatedOrders, 'preparing'), startedAt),
       )
     }
 
@@ -817,8 +824,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
     )
     const linkedOrders = kitchenOrders.filter(
       (order) =>
-        batchSnapshot.linkedOrders.includes(order.token) &&
-        order.status === 'preparing',
+        batchSnapshot.linkedOrders.includes(order.token),
     )
 
     if (linkedOrders.length === 0) return
@@ -846,7 +852,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
     setConfirmedOrder(null)
     setStudentView('menu')
     setPickupMethod('asap')
-    setPickupSlot(pickupSlots[0])
+    setPickupSlot(pickupSlots[0] || '')
     setInstructions('')
   }
 
@@ -855,7 +861,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
     setConfirmedOrder(null)
     setStudentView('tracking')
     setPickupMethod('asap')
-    setPickupSlot(pickupSlots[0])
+    setPickupSlot(pickupSlots[0] || '')
     setInstructions('')
   }
 
@@ -923,7 +929,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
             error={authError}
             isLoggingOut={isLoggingOut}
             onEditPhone={
-              user.googleLinked && user.phoneNumber
+              user.role === 'STUDENT' && user.phoneNumber && (user.googleLinked || user.profileDetailsMissing)
                 ? onEditPhone
                 : undefined
             }
@@ -1022,8 +1028,15 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
         <section className="menu-section" aria-labelledby="menu-title">
           <div className="section-heading">
             <div><p className="eyebrow">Fresh from the canteen</p><h2 id="menu-title">Today's menu</h2></div>
-            <p>{visibleItems.length} items available</p>
+            <p>{visibleItems.filter(item => item.live?.available).length} items available</p>
           </div>
+          <div className="category-tabs" aria-label="When would you like to eat?">
+            <button type="button" className={menuIntent === 'now' ? 'active' : ''} onClick={() => chooseMenuIntent('now')}>I'm hungry now</button>
+            <button type="button" className={menuIntent === 'break' ? 'active' : ''} disabled={!nextBreak?.eligible} onClick={() => chooseMenuIntent('break')}>My next break is {nextBreak?.label || 'finished for today'}</button>
+            <button type="button" className={menuIntent === 'time' ? 'active' : ''} onClick={() => chooseMenuIntent('time')}>I'll choose a time</button>
+          </div>
+          {menuIntent === 'time' && <label className="field-label">Pickup window<select value={pickupSlot} onChange={event => setPickupSlot(event.target.value)}><option value="">Choose a break</option>{pickupSlots.map(slot => <option key={slot} value={slot}>{slot}</option>)}</select></label>}
+          <p role="status">{liveMenu?.error || (!liveMenu ? 'Checking today’s kitchen availability…' : pickupMethod === 'scheduled' && !pickupSlots.length ? 'Advance orders are closed for today.' : 'Scheduled pickups close one hour before the break.')}</p>
           <div className="category-tabs" aria-label="Menu categories">
             {categories.map((category) => (
               <button className={activeCategory === category ? 'active' : ''} key={category} type="button" onClick={() => setActiveCategory(category)}>{category}</button>
@@ -1038,8 +1051,10 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                   <div className="food-content">
                     <div className="food-title-row"><h3>{item.name}</h3><strong>₹{item.price}</strong></div>
                     <p>{item.description}</p><span className="prep-time">{item.time}</span>
+                    {item.live?.recommended && <small>Good for your pickup</small>}
+                    {!item.live?.available && <small role="status">{item.live?.reason || 'Checking availability…'}</small>}
                     {quantity === 0 ? (
-                      <button className="add-button" type="button" onClick={() => addItem(item.id)}>Add to cart</button>
+                      <button className="add-button" type="button" disabled={!item.live?.available} onClick={() => addItem(item.id)}>Add to cart</button>
                     ) : (
                       <div className="quantity-control" aria-label={`${item.name} quantity`}>
                         <button type="button" onClick={() => removeItem(item.id)}>−</button><span>{quantity}</span><button type="button" onClick={() => addItem(item.id)}>+</button>
@@ -1121,7 +1136,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                 {pickupMethod === 'scheduled' && (
                   <label className="field-label">Pickup window
                     <select value={pickupSlot} onChange={(event) => setPickupSlot(event.target.value)}>{pickupSlots.map((slot) => <option value={slot} key={slot}>{slot}</option>)}</select>
-                    <small>These are placeholder slots. Live capacity rules will be connected later.</small>
+                    <small>Scheduled pickups close one hour before the break starts.</small>
                   </label>
                 )}
                 <label className="field-label">Special instructions <span>(optional)</span>

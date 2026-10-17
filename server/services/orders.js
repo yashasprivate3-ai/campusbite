@@ -1,3 +1,4 @@
+import { itemStatus } from '../../shared/batchPolicy.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { ApiError, invalidRequest } from './apiError.js'
 
@@ -518,7 +519,17 @@ export function updateOrderStatus(database, orderId, payload) {
       )
     }
 
-    const expectedStatus = NEXT_STATUS[currentOrder.status]
+    const items = selectItems(database, orderId)
+    if (batchItem && !items.some(item => item.name === batchItem)) {
+      throw invalidRequest('This batch item is not part of the order.')
+    }
+    const history = selectStatusHistory(database, orderId)
+    const expectedStatus = NEXT_STATUS[batchItem
+      ? itemStatus({ status: currentOrder.status, statusHistory: history }, batchItem)
+      : currentOrder.status]
+    const orderStatus = batchItem && nextStatus === 'ready' && !items.every(item =>
+      item.name === batchItem || itemStatus({ status: currentOrder.status, statusHistory: history }, item.name) === 'ready',
+    ) ? 'preparing' : nextStatus
 
     if (expectedStatus !== nextStatus) {
       throw new ApiError(
@@ -535,7 +546,7 @@ export function updateOrderStatus(database, orderId, payload) {
             SET status = ?, updated_at = CURRENT_TIMESTAMP
           WHERE id = ?`,
       )
-      .run(nextStatus, orderId)
+      .run(orderStatus, orderId)
     database
       .prepare(
         `INSERT INTO status_history (order_id, status, batch_item)

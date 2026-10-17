@@ -1,3 +1,5 @@
+import { campusDate } from '../../shared/pickupPolicy.js'
+import { itemStatus } from '../../shared/batchPolicy.js'
 import { calculateBatches } from './batchCalculator.js'
 
 function hasSameTokens(left = [], right = []) {
@@ -24,21 +26,13 @@ export function isToday(timestamp, now = new Date()) {
   if (Number.isNaN(date.getTime())) return false
 
   return (
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
+    campusDate(date) === campusDate(now)
   )
 }
 
 export function getKitchenMetrics(orders, batchRecords, now = new Date()) {
   const todayOrders = orders.filter((order) => isToday(order.createdAt, now))
-  const completedOrders = todayOrders.filter(
-    (order) =>
-      order.batchCompletedAt ||
-      (order.statusHistory || []).some(
-        (entry) => entry.status === 'ready' && entry.batchItem,
-      ),
-  )
+  const completedOrders = todayOrders.filter(order => order.status === 'ready')
 
   return {
     total: todayOrders.length,
@@ -46,8 +40,7 @@ export function getKitchenMetrics(orders, batchRecords, now = new Date()) {
     preparing: todayOrders.filter((order) => order.status === 'preparing').length,
     ready: todayOrders.filter((order) => order.status === 'ready').length,
     completed: completedOrders.length,
-    activeBatches: batchRecords.filter((batch) => batch.status === 'preparing')
-      .length,
+    activeBatches: calculateBatches(todayOrders.filter(order => order.status !== 'ready')).filter(batch => batch.stage === 'preparing').length,
   }
 }
 
@@ -56,28 +49,29 @@ export function getProductionSummaryBatches(orders, batchRecords) {
     orders.filter(
       (order) => order.status === 'new' || order.status === 'preparing',
     ),
-  ).map((batch) => ({
+  ).filter(batch => batch.stage !== 'ready').map((batch) => ({
     ...batch,
-    summaryKey: `active-${batch.itemName}`,
+    summaryKey: `active-${batch.batchKey}-${batch.stage}`,
   }))
   const activeItemNames = new Set(
-    activeBatches.map((batch) => batch.itemName),
+    activeBatches.map((batch) => batch.batchKey),
   )
 
   const latestCompletedRecords = new Map()
   batchRecords
     .filter((batch) => batch.status === 'completed' && batch.completedAt)
     .forEach((batch) => {
-      const current = latestCompletedRecords.get(batch.itemName)
+      const current = latestCompletedRecords.get(batch.batchKey || batch.id)
       if (!current || batch.completedAt > current.completedAt) {
-        latestCompletedRecords.set(batch.itemName, batch)
+        latestCompletedRecords.set(batch.batchKey || batch.id, batch)
       }
     })
 
   const completedBatches = [...latestCompletedRecords.values()]
-    .filter((batch) => !activeItemNames.has(batch.itemName))
+    .filter((batch) => !activeItemNames.has(batch.batchKey))
     .map((batch) => ({
       itemName: batch.itemName,
+      batchKey: batch.batchKey,
       requiredQuantity: batch.requiredQuantity,
       linkedOrders: [...batch.linkedOrders],
       summaryKey: `completed-${batch.id}`,
@@ -88,12 +82,12 @@ export function getProductionSummaryBatches(orders, batchRecords) {
   )
     .filter(
       (batch) =>
-        !activeItemNames.has(batch.itemName) &&
-        !latestCompletedRecords.has(batch.itemName),
+        !activeItemNames.has(batch.batchKey) &&
+        !latestCompletedRecords.has(batch.batchKey),
     )
     .map((batch) => ({
       ...batch,
-      summaryKey: `legacy-completed-${batch.itemName}`,
+      summaryKey: `legacy-completed-${batch.batchKey}`,
     }))
 
   return {
@@ -108,11 +102,12 @@ export function getProductionSummaryBatches(orders, batchRecords) {
 
 export function createBatchSnapshot(batch, orders, status) {
   const linkedOrders = orders.filter(
-    (order) => batch.linkedOrders.includes(order.token) && order.status === status,
+    (order) => batch.linkedOrders.includes(order.token) && itemStatus(order, batch.itemName) === status,
   )
 
   return {
     itemName: batch.itemName,
+    batchKey: batch.batchKey,
     linkedOrders: linkedOrders.map((order) => order.token),
     requiredQuantity: linkedOrders.reduce(
       (total, order) =>
@@ -125,66 +120,26 @@ export function createBatchSnapshot(batch, orders, status) {
   }
 }
 
-export function startBatchOrders(orders, batch, startedAt) {
-  let changed = false
-  const nextOrders = orders.map((order) => {
-    if (!batch.linkedOrders.includes(order.token) || order.status !== 'new') {
-      return order
-    }
-
-    changed = true
-    return {
-      ...order,
-      status: 'preparing',
-      statusHistory: [
-        ...(order.statusHistory || []),
-        { status: 'preparing', at: startedAt, batchItem: batch.itemName },
-      ],
-    }
-  })
-
-  return changed ? nextOrders : orders
-}
-
-export function completeBatchOrders(orders, batch, completedAt) {
-  let changed = false
-  const nextOrders = orders.map((order) => {
-    if (
-      !batch.linkedOrders.includes(order.token) ||
-      order.status !== 'preparing'
-    ) {
-      return order
-    }
-
-    changed = true
-    return {
-      ...order,
-      status: 'ready',
-      batchCompletedAt: completedAt,
-      statusHistory: [
-        ...(order.statusHistory || []),
-        { status: 'ready', at: completedAt, batchItem: batch.itemName },
-      ],
-    }
-  })
-
-  return changed ? nextOrders : orders
-}
-
 export function startBatchRecord(records, batch, startedAt) {
   if (batch.linkedOrders.length === 0) return records
 
   const alreadyActive = records.some(
     (record) =>
-      record.status === 'preparing' && record.itemName === batch.itemName,
+      record.status === 'preparing' && record.itemName === batch.itemName && record.batchKey === batch.batchKey,
   )
-  if (alreadyActive) return records
+  if (alreadyActive) return records.map(record => {
+    if (record.status !== 'preparing' || record.batchKey !== batch.batchKey) return record
+    if (batch.linkedOrders.every(token => record.linkedOrders.includes(token))) return record
+    return { ...record, requiredQuantity: record.requiredQuantity + batch.requiredQuantity,
+      linkedOrders: [...new Set([...record.linkedOrders, ...batch.linkedOrders])] }
+  })
 
   return [
     ...records,
     {
-      id: `batch-${startedAt}-${batch.itemName}`,
+      id: `batch-${startedAt}-${batch.batchKey}`,
       itemName: batch.itemName,
+      batchKey: batch.batchKey,
       requiredQuantity: batch.requiredQuantity,
       linkedOrders: [...batch.linkedOrders],
       startedAt,
@@ -199,14 +154,14 @@ export function completeBatchRecord(records, batch, completedAt) {
 
   const activeIndex = records.findLastIndex(
     (record) =>
-      record.status === 'preparing' && record.itemName === batch.itemName,
+      record.status === 'preparing' && record.itemName === batch.itemName && record.batchKey === batch.batchKey,
   )
 
   if (activeIndex === -1) {
     const alreadyCompleted = records.some(
       (record) =>
         record.status === 'completed' &&
-        record.itemName === batch.itemName &&
+        record.itemName === batch.itemName && record.batchKey === batch.batchKey &&
         hasSameTokens(record.linkedOrders, batch.linkedOrders),
     )
     if (alreadyCompleted) return records
@@ -214,8 +169,9 @@ export function completeBatchRecord(records, batch, completedAt) {
     return [
       ...records,
       {
-        id: `batch-${completedAt}-${batch.itemName}`,
+        id: `batch-${completedAt}-${batch.batchKey}`,
         itemName: batch.itemName,
+        batchKey: batch.batchKey,
         requiredQuantity: batch.requiredQuantity,
         linkedOrders: [...batch.linkedOrders],
         startedAt: completedAt,
@@ -227,7 +183,7 @@ export function completeBatchRecord(records, batch, completedAt) {
 
   return records.map((record, index) =>
     index === activeIndex
-      ? { ...record, status: 'completed', completedAt }
+      ? { ...record, requiredQuantity: batch.requiredQuantity, linkedOrders: [...batch.linkedOrders], status: 'completed', completedAt }
       : record,
   )
 }
@@ -236,7 +192,7 @@ export function findActiveBatchRecord(batch, records) {
   return records.findLast(
     (record) =>
       record.status === 'preparing' &&
-      record.itemName === batch.itemName &&
+      record.itemName === batch.itemName && record.batchKey === batch.batchKey &&
       record.linkedOrders.every((token) => batch.linkedOrders.includes(token)),
   )
 }
@@ -262,6 +218,7 @@ export function getBatchPriorities(batches, orders) {
 
       return {
         itemName: batch.itemName,
+        batchKey: batch.batchKey,
         linkedCount: batch.linkedOrders.length,
         hasActiveOrders: linkedOrders.length > 0,
         waitingSince: linkedOrders
@@ -284,7 +241,7 @@ export function getBatchPriorities(batches, orders) {
 
   return Object.fromEntries(
     activeBatches.map((batch) => [
-      batch.itemName,
+      batch.batchKey,
       {
         highVolume: batch.linkedCount === highestCount,
         longestWait: Boolean(longestWait && batch.waitingSince === longestWait),

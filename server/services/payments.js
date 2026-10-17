@@ -1,3 +1,4 @@
+import { reserveCartStock } from './menuAvailability.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { buildTrustedCartSnapshot } from '../data/menu.js'
 import { ApiError, invalidRequest } from './apiError.js'
@@ -152,15 +153,24 @@ export async function initiatePayment(database, payload, studentUserId, paymentC
   const publicId = `pay_${randomUUID()}`
   const placeholderOrderId = paymentConfig.provider === 'cashfree' ? publicId : `pending_${randomUUID()}`
   const expiresAt = new Date(now.getTime() + (paymentConfig.attemptLifetimeMinutes || paymentConfig.razorpay?.attemptLifetimeMinutes || 15) * 60_000)
-  database.prepare(`INSERT INTO payment_attempts (
-    public_id, student_user_id, provider, provider_order_id, amount_paise,
-    currency, trusted_cart_json, checkout_details_json, request_fingerprint,
-    idempotency_key, status, expires_at, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, 'INR', ?, ?, ?, ?, 'created', ?, ?, ?)`)
-    .run(publicId, studentUserId, paymentConfig.provider, placeholderOrderId, normalized.trustedCart.totalPaise,
-      JSON.stringify(normalized.trustedCart.items), JSON.stringify(normalized.checkoutDetails),
-      normalized.fingerprint, normalized.idempotencyKey, expiresAt.toISOString(),
-      now.toISOString(), now.toISOString())
+  database.exec('BEGIN IMMEDIATE;')
+  try {
+    database.prepare(`INSERT INTO payment_attempts (
+      public_id, student_user_id, provider, provider_order_id, amount_paise,
+      currency, trusted_cart_json, checkout_details_json, request_fingerprint,
+      idempotency_key, status, expires_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'INR', ?, ?, ?, ?, 'created', ?, ?, ?)`)
+      .run(publicId, studentUserId, paymentConfig.provider, placeholderOrderId, normalized.trustedCart.totalPaise,
+        JSON.stringify(normalized.trustedCart.items), JSON.stringify(normalized.checkoutDetails),
+        normalized.fingerprint, normalized.idempotencyKey, expiresAt.toISOString(),
+        now.toISOString(), now.toISOString())
+    const insertedAttempt = selectAttempt(database, publicId)
+    reserveCartStock(database, insertedAttempt.id, normalized.trustedCart, normalized.checkoutDetails, paymentConfig.orderingClock?.() || new Date())
+    database.exec('COMMIT;')
+  } catch (error) {
+    database.exec('ROLLBACK;')
+    throw error
+  }
   recordEvent(database, 'PAYMENT_INITIATION_REQUESTED', studentUserId, { attemptId: publicId, provider: paymentConfig.provider })
 
   try {

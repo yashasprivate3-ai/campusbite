@@ -1,3 +1,6 @@
+import { menuAvailability } from './services/menuAvailability.js'
+import { optionalAuth, requireAuth } from './services/authorization.js'
+import { sendJson, sendMethodNotAllowed } from './services/http.js'
 import { createServer } from 'node:http'
 import { serverConfig } from './config.js'
 import { initializeDatabase } from './db.js'
@@ -5,6 +8,7 @@ import { handleHealthCheck } from './routes/health.js'
 import { handleAuthRoutes } from './routes/auth.js'
 import { handleOrderRoutes } from './routes/orders.js'
 import { handlePaymentRoutes } from './routes/payments.js'
+import { handleOwnerStockRoutes } from './routes/ownerStock.js'
 import { seedDevelopmentAccounts } from './services/devAccounts.js'
 import {
   sendApiError,
@@ -59,6 +63,13 @@ const server = createServer(async (request, response) => {
       `http://${request.headers.host || `${serverConfig.host}:${serverConfig.port}`}`,
     )
 
+    if (requestUrl.pathname === '/api/menu') {
+      requireAuth(optionalAuth(database, request, serverConfig.auth))
+      if (request.method !== 'GET') { sendMethodNotAllowed(response, ['GET']); return }
+      sendJson(response, 200, menuAvailability(database, requestUrl.searchParams.get('pickupMethod') || 'asap', requestUrl.searchParams.get('pickupSlot')))
+      return
+    }
+
     if (request.method === 'GET' && requestUrl.pathname === '/api/health') {
       handleHealthCheck(response)
       return
@@ -73,6 +84,18 @@ const server = createServer(async (request, response) => {
         serverConfig.auth,
         loginThrottle,
         phoneVerificationProvider,
+      )
+    ) {
+      return
+    }
+
+    if (
+      await handleOwnerStockRoutes(
+        request,
+        response,
+        requestUrl,
+        database,
+        serverConfig.auth,
       )
     ) {
       return

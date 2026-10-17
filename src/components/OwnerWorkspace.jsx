@@ -1,9 +1,11 @@
+import { OwnerStockPanel } from './OwnerStockPanel.jsx'
+
 export function OwnerWorkspace({ onOpenKitchen, user }) {
   return (
     <main className="owner-main" aria-labelledby="owner-title">
       <section className="owner-hero">
         <div>
-          <p className="eyebrow">Owner workspace · Foundation</p>
+          <p className="eyebrow">Owner workspace Â· Foundation</p>
           <h1 id="owner-title">Welcome, {user.displayName}</h1>
           <p>
             Authentication and authorised kitchen access are active. Owner
@@ -12,6 +14,8 @@ export function OwnerWorkspace({ onOpenKitchen, user }) {
         </div>
         <span className="owner-status">Secure session active</span>
       </section>
+
+      <OwnerStockPanel />
 
       <section className="owner-foundation-card">
         <div>

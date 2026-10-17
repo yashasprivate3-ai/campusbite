@@ -128,12 +128,12 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  const completePhoneOnboarding = useCallback(async (phoneNumber) => {
+  const completePhoneOnboarding = useCallback(async (phoneNumber, details) => {
     setIsCompletingOnboarding(true)
     setError('')
 
     try {
-      const updatedUser = await saveStudentPhone(phoneNumber)
+      const updatedUser = await saveStudentPhone(phoneNumber, details)
       setUser(updatedUser)
       return updatedUser
     } catch (requestError) {

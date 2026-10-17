@@ -29,6 +29,15 @@ function maskPhoneNumber(phoneNumber) {
   return `${phoneNumber.slice(0, 3)}******${phoneNumber.slice(-4)}`
 }
 
+function normalizeStudentDetail(value, label) {
+  if (typeof value !== 'string') throw invalidRequest(label + ' is required.')
+  const normalized = value.trim().replace(/\s+/g, ' ')
+  if (!normalized || normalized.length > 80 || [...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
+    throw invalidRequest('Enter a valid ' + label.toLowerCase() + ' (1–80 characters).')
+  }
+  return normalized
+}
+
 export function updateStudentPhone(database, userId, payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw invalidRequest('Request body must be an object.')
@@ -37,14 +46,17 @@ export function updateStudentPhone(database, userId, payload) {
   const phoneNumber = normalizeIndianMobileNumber(payload.phoneNumber)
   const current = database
     .prepare(
-      `SELECT phone_number, phone_verified, onboarding_completed_at
+      `SELECT phone_number, phone_verified, onboarding_completed_at, course, student_class, student_profile_required
          FROM users
-        WHERE id = ? AND role = 'STUDENT'`,
+        WHERE id = ? AND role = 'STUDENT' AND status = 'ACTIVE'`,
     )
     .get(userId)
 
   if (!current) throw invalidRequest('Student profile is unavailable.')
 
+  const updatingDetails = current.student_profile_required || Object.hasOwn(payload, 'course') || Object.hasOwn(payload, 'studentClass')
+  const course = updatingDetails ? normalizeStudentDetail(payload.course ?? current.course, 'Course') : current.course
+  const studentClass = updatingDetails ? normalizeStudentDetail(payload.studentClass ?? current.student_class, 'Class') : current.student_class
   const changed = current.phone_number !== phoneNumber
   const firstPhone = !current.phone_number
   const completedNow = !current.onboarding_completed_at
@@ -55,7 +67,7 @@ export function updateStudentPhone(database, userId, payload) {
     database
       .prepare(
         `UPDATE users
-            SET phone_number = ?,
+            SET phone_number = ?, course = ?, student_class = ?,
                 phone_verified = CASE WHEN ? THEN 0 ELSE phone_verified END,
                 phone_verified_at = CASE WHEN ? THEN NULL ELSE phone_verified_at END,
                 onboarding_completed_at = COALESCE(onboarding_completed_at, ?),
@@ -64,6 +76,8 @@ export function updateStudentPhone(database, userId, payload) {
       )
       .run(
         phoneNumber,
+        course,
+        studentClass,
         changed ? 1 : 0,
         changed ? 1 : 0,
         updatedAt,

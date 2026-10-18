@@ -171,3 +171,38 @@ test('queue-informed recommendations favor ready items during workload and expos
   assert.equal(live.items.find(item=>item.recommended).preparationMinutes,0)
   assert.equal(live.workloadEstimateConfirmed,false)
 })
+test('student availability excludes released reservations but counts held and consumed', async t => {
+  const { db, config, gateway } = setup(t, 6)
+
+  await initiatePayment(db, cart('status-test-held'), 1, config, gateway)
+  await initiatePayment(db, cart('status-test-consumed'), 1, config, gateway)
+  await initiatePayment(db, cart('status-test-released'), 1, config, gateway)
+
+  const initial = menuAvailability(db, 'asap', null, noon)
+    .items.find(item => item.id === 1)
+
+  assert.equal(initial.remaining, 0)
+
+  const updateStatus = db.prepare(`
+    UPDATE stock_reservations
+    SET status = ?
+    WHERE attempt_id = (
+      SELECT id FROM payment_attempts WHERE idempotency_key = ?
+    )
+  `)
+
+  updateStatus.run('consumed', 'status-test-consumed')
+  updateStatus.run('released', 'status-test-released')
+
+  const after = menuAvailability(db, 'asap', null, noon)
+    .items.find(item => item.id === 1)
+
+  assert.equal(after.remaining, 2)
+  assert.equal(after.available, true)
+
+  const held = db.prepare(
+    "SELECT COUNT(*) AS count FROM stock_reservations WHERE status = 'held'"
+  ).get().count
+
+  assert.equal(held, 1)
+})

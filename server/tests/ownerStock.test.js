@@ -214,8 +214,9 @@ test('student and kitchen sessions cannot update owner stock', async t => {
 
 test('authenticated owner can read confirmed stock', async t => {
   const db = setup(t)
+  const routeNow = new Date()
 
-  confirmOwnerStock(db, [{ id: 1, quantity: 12 }], now)
+  confirmOwnerStock(db, [{ id: 1, quantity: 12 }], routeNow)
 
   const request = createRoleRequest(db, 'OWNER', 'GET')
   const requestUrl = new URL(request.url, 'http://localhost')
@@ -257,6 +258,7 @@ test('authenticated owner can read confirmed stock', async t => {
 
 test('authenticated owner can update stock through PUT route', async t => {
   const db = setup(t)
+  const routeNow = new Date()
   const request = createRoleRequest(db, 'OWNER', 'PUT')
 
   const body = Buffer.from(JSON.stringify({
@@ -297,6 +299,41 @@ test('authenticated owner can update stock through PUT route', async t => {
   assert.equal(item.quantity, 15)
   assert.equal(item.remaining, 15)
 
-  const saved = getOwnerStock(db, now).items.find(entry => entry.id === 1)
+  const saved = getOwnerStock(db, routeNow).items.find(entry => entry.id === 1)
   assert.equal(saved.quantity, 15)
+})
+test('held and consumed stock remains committed while released stock becomes available', t => {
+  const db = setup(t)
+
+  confirmOwnerStock(db, [{ id: 1, quantity: 10 }], now)
+
+  createTestReservation(db, 1, 2, 901)
+  createTestReservation(db, 1, 3, 902)
+  createTestReservation(db, 1, 4, 903)
+
+  const updateStatus = db.prepare(`
+    UPDATE stock_reservations
+    SET status = ?
+    WHERE attempt_id = (
+      SELECT id FROM payment_attempts WHERE public_id = ?
+    )
+  `)
+
+  updateStatus.run('held', 'stock-attempt-901')
+  updateStatus.run('consumed', 'stock-attempt-902')
+  updateStatus.run('released', 'stock-attempt-903')
+
+  const stock = getOwnerStock(db, now).items.find(item => item.id === 1)
+
+  assert.equal(stock.quantity, 10)
+  assert.equal(stock.reserved, 5)
+  assert.equal(stock.remaining, 5)
+
+  assert.throws(
+    () => confirmOwnerStock(db, [{ id: 1, quantity: 4 }], now),
+    { code: 'stock_below_reservations' },
+  )
+
+  const updated = confirmOwnerStock(db, [{ id: 1, quantity: 5 }], now)
+  assert.equal(updated.items.find(item => item.id === 1).remaining, 0)
 })

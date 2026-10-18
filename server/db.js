@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 11
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -385,6 +385,19 @@ function migrateToVersion10(database) {
   );`)
 }
 
+function migrateToVersion11(database) {
+  addColumnIfMissing(database, 'stock_reservations', 'status',
+    "TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held', 'consumed', 'released'))")
+  addColumnIfMissing(database, 'stock_reservations', 'released_at', 'TEXT')
+  database.exec(`UPDATE stock_reservations
+    SET status = 'consumed'
+    WHERE attempt_id IN (
+      SELECT id
+      FROM payment_attempts
+      WHERE status = 'paid' AND order_id IS NOT NULL
+    );`)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -434,6 +447,7 @@ export function initializeDatabase(databasePath) {
     if (currentVersion < 8) migrateToVersion8(database)
     if (currentVersion < 9) migrateToVersion9(database)
     if (currentVersion < 10) migrateToVersion10(database)
+    if (currentVersion < 11) migrateToVersion11(database)
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
     database.exec('COMMIT;')

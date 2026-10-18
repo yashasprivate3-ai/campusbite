@@ -11,11 +11,12 @@ export function getOwnerStock(database, now = new Date()) {
       m.quantity,
       COALESCE(SUM(r.quantity), 0) AS reserved
     FROM daily_menu_stock m
-    LEFT JOIN stock_reservations r
-      ON r.service_date = m.service_date
-      AND r.menu_item_id = m.menu_item_id
-    WHERE m.service_date = ?
-    GROUP BY m.menu_item_id, m.quantity
+LEFT JOIN stock_reservations r
+  ON r.service_date = m.service_date
+  AND r.menu_item_id = m.menu_item_id
+  AND r.status IN ('held', 'consumed')
+WHERE m.service_date = ?
+GROUP BY m.menu_item_id, m.quantity
   `).all(serviceDate)
 
   const byId = new Map(rows.map(row => [row.menu_item_id, row]))
@@ -84,8 +85,10 @@ export function confirmOwnerStock(database, items, now = new Date()) {
   try {
     const reservedStatement = database.prepare(`
       SELECT COALESCE(SUM(quantity), 0) AS reserved
-      FROM stock_reservations
-      WHERE service_date = ? AND menu_item_id = ?
+FROM stock_reservations
+WHERE service_date = ?
+  AND menu_item_id = ?
+  AND status IN ('held', 'consumed')
     `)
 
     const upsertStatement = database.prepare(`

@@ -83,6 +83,9 @@ test('duplicate and out-of-order webhooks recover terminal attempts with exactly
     const result = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, provider())
     assert.equal(result.status, 'paid')
     assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
+    const reservations = database.prepare('SELECT status FROM stock_reservations').all()
+    assert.ok(reservations.length > 0)
+    assert.ok(reservations.every(row => row.status === 'consumed'))
     const repeated = await verifyPayment(database, { attemptId: attempt.attemptId }, 1, paymentConfig, provider())
     assert.equal(repeated.order.id, result.order.id)
   }
@@ -111,6 +114,8 @@ test('webhook cannot reuse a payment linked to another attempt and rolls back fa
   database.exec("CREATE TRIGGER fail_order BEFORE INSERT ON orders BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;")
   assert.throws(() => handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway()))
   assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
+  assert.ok(database.prepare('SELECT status FROM stock_reservations').all().every(row => row.status === 'held'))
+  assert.equal(database.prepare('SELECT status FROM payment_attempts ORDER BY id LIMIT 1').get().status, 'initiated')
   database.exec('DROP TRIGGER fail_order;')
   handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
   assert.throws(() => handlePaymentWebhook(database, ...signedEvent({ order_id: 'order_TestOrder2' }), paymentConfig, webhookGateway()), { code: 'webhook_payment_mismatch' })
@@ -202,6 +207,20 @@ function provider(overrides = {}) {
   }
 }
 
+function capturedPayment(attempt, overrides = {}) {
+  return {
+    amountPaise: attempt.amountPaise,
+    captured: true,
+    currency: 'INR',
+    orderId: attempt.checkout.orderId,
+    paymentId: 'pay_ReservationGuard1',
+    providerCode: 'captured',
+    providerMessage: 'Captured.',
+    status: 'paid',
+    ...overrides,
+  }
+}
+
 test('trusted cart computes integer-paise totals and rejects tampering', () => {
   assert.equal(buildTrustedCartSnapshot([{ menuItemId: 1, quantity: 2 }]).totalPaise, 14000)
   assert.throws(() => buildTrustedCartSnapshot([{ menuItemId: 999, quantity: 1 }]))
@@ -237,6 +256,53 @@ test('captured verification creates exactly one order and repeated verification 
   assert.equal(paid.status, 'paid')
   assert.equal(paid.order.id, repeated.order.id)
   assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 1)
+  assert.deepEqual(database.prepare('SELECT status FROM stock_reservations').all().map(row => ({ ...row })),
+    [{ status: 'consumed' }])
+})
+
+test('captured fulfillment rejects missing, released, mismatched, or extra reservations atomically', async () => {
+  const corruptions = [
+    ['missing', (database) => database.prepare('DELETE FROM stock_reservations').run()],
+    ['released', (database) => database.prepare("UPDATE stock_reservations SET status = 'released'").run()],
+    ['quantity', (database) => database.prepare('UPDATE stock_reservations SET quantity = quantity + 1').run()],
+    ['menu-item', (database) => database.prepare('UPDATE stock_reservations SET menu_item_id = 2').run()],
+    ['extra', (database) => database.prepare(`INSERT INTO stock_reservations
+      (attempt_id, service_date, menu_item_id, quantity)
+      SELECT attempt_id, service_date, 2, 1 FROM stock_reservations LIMIT 1`).run()],
+  ]
+
+  for (const [name, corrupt] of corruptions) {
+    const database = createDatabase()
+    const attempt = await initiatePayment(database, payload(`guard-${name}`), 1, paymentConfig, provider())
+    corrupt(database)
+    const gateway = provider({ async fetchProviderStatus() { return capturedPayment(attempt) } })
+
+    await assert.rejects(getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway), /reservations/)
+    assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 0)
+    assert.equal(database.prepare('SELECT status FROM payment_attempts').get().status, 'initiated')
+    assert.equal(database.prepare("SELECT count(*) AS count FROM stock_reservations WHERE status = 'consumed'").get().count, 0)
+  }
+})
+
+test('multi-item captured fulfillment validates and consumes every exact reservation once', async () => {
+  const database = createDatabase()
+  const multiItemPayload = {
+    ...payload('multi-item-guard'),
+    items: [{ menuItemId: 1, quantity: 2 }, { menuItemId: 2, quantity: 3 }],
+  }
+  const attempt = await initiatePayment(database, multiItemPayload, 1, paymentConfig, provider())
+  const gateway = provider({ async fetchProviderStatus() { return capturedPayment(attempt) } })
+
+  const paid = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
+  const repeated = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
+  assert.equal(paid.status, 'paid')
+  assert.equal(repeated.order.id, paid.order.id)
+  assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 1)
+  assert.deepEqual(database.prepare(`SELECT menu_item_id AS menuItemId, quantity, status
+    FROM stock_reservations ORDER BY menu_item_id`).all().map(row => ({ ...row })), [
+    { menuItemId: 1, quantity: 2, status: 'consumed' },
+    { menuItemId: 2, quantity: 3, status: 'consumed' },
+  ])
 })
 
 test('ownership and invalid signatures are rejected without creating orders', async () => {

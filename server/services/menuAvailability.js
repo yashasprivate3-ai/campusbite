@@ -6,7 +6,9 @@ import { campusDate, campusMinute, pickupWindows, validatePickup, maximumPrepara
 
 function stockFor(database, date, itemId) {
   return database.prepare(`SELECT s.quantity - COALESCE((SELECT SUM(r.quantity) FROM stock_reservations r
-    WHERE r.service_date = s.service_date AND r.menu_item_id = s.menu_item_id), 0) AS remaining
+    WHERE r.service_date = s.service_date
+      AND r.menu_item_id = s.menu_item_id
+      AND r.status IN ('held', 'consumed')), 0) AS remaining
     FROM daily_menu_stock s WHERE service_date = ? AND menu_item_id = ?`).get(date, itemId)
 }
 

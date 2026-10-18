@@ -217,6 +217,44 @@ function rejectMismatch(database, row, studentUserId, reason) {
   return mapAttempt(selectAttempt(database, row.public_id), database)
 }
 
+function consumeMatchingReservations(database, attemptId, items) {
+  const expected = new Map()
+  for (const item of items) {
+    if (!Number.isSafeInteger(item?.menuItemId) || !Number.isSafeInteger(item?.quantity) ||
+        item.quantity < 1 || expected.has(item.menuItemId)) {
+      throw new Error('Stored trusted payment snapshot is invalid.')
+    }
+    expected.set(item.menuItemId, item.quantity)
+  }
+
+  const reservationRows = database.prepare(`
+    SELECT menu_item_id AS menuItemId, quantity, status
+    FROM stock_reservations
+    WHERE attempt_id = ?
+  `).all(attemptId)
+  const seen = new Set()
+  const reservationsMatch = reservationRows.length === expected.size &&
+    reservationRows.every((reservation) => {
+      if (seen.has(reservation.menuItemId)) return false
+      seen.add(reservation.menuItemId)
+      return reservation.status === 'held' &&
+        expected.get(reservation.menuItemId) === reservation.quantity
+    })
+
+  if (!reservationsMatch || seen.size !== expected.size) {
+    throw new Error('Payment stock reservations do not match the trusted cart.')
+  }
+
+  const consumed = database.prepare(`
+    UPDATE stock_reservations
+    SET status = 'consumed'
+    WHERE attempt_id = ? AND status = 'held'
+  `).run(attemptId)
+  if (consumed.changes !== expected.size) {
+    throw new Error('Payment stock reservations were not consumed safely.')
+  }
+}
+
 function fulfillCapturedPayment(database, row, studentUserId, payment, signatureVerifiedAt = null) {
   if (payment.orderId !== row.provider_order_id) return rejectMismatch(database, row, studentUserId, 'order')
   if (payment.amountPaise !== row.amount_paise) return rejectMismatch(database, row, studentUserId, 'amount')
@@ -238,6 +276,7 @@ function fulfillCapturedPayment(database, row, studentUserId, payment, signature
     const items = parseJson(current.trusted_cart_json, null)
     const checkoutDetails = parseJson(current.checkout_details_json, null)
     if (!Array.isArray(items) || !checkoutDetails) throw new Error('Stored trusted payment snapshot is invalid.')
+    consumeMatchingReservations(database, current.id, items)
     const orderResult = createPaidOrderInCurrentTransaction(database, {
       attemptPublicId: current.public_id,
       checkoutDetails,

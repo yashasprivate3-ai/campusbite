@@ -189,6 +189,40 @@ test('schema 7 upgrade preserves existing paid records and relationships', (t) =
   } finally { db.close() }
 })
 
+test('schema 10 upgrade consumes reservations for historical paid linked orders', (t) => {
+  const folder = mkdtempSync(path.join(tmpdir(), 'campusbite-v11-migration-'))
+  t.after(() => rmSync(folder, { recursive: true, force: true }))
+  const file = path.join(folder, 'isolated.db')
+  let db = initializeDatabase(file)
+  db.exec(`DROP TABLE stock_reservations;
+    CREATE TABLE stock_reservations (
+      attempt_id INTEGER NOT NULL REFERENCES payment_attempts(id),
+      service_date TEXT NOT NULL, menu_item_id INTEGER NOT NULL,
+      quantity INTEGER NOT NULL CHECK (quantity > 0),
+      PRIMARY KEY (attempt_id, menu_item_id)
+    );
+    PRAGMA user_version=10;`)
+  db.prepare(`INSERT INTO users (public_id,role,display_name,status)
+    VALUES ('v10-student','STUDENT','V10 Student','ACTIVE')`).run()
+  db.exec(`INSERT INTO orders (id,token,pickup_method,total_amount)
+      VALUES (1,'v10-token','asap',140);
+    INSERT INTO payment_attempts (public_id,student_user_id,provider,provider_order_id,amount_paise,currency,
+      trusted_cart_json,checkout_details_json,request_fingerprint,idempotency_key,status,provider_payment_id,expires_at,order_id)
+      VALUES ('v10-attempt',1,'razorpay','order_v10',14000,'INR','[]','{}','v10-fingerprint','v10-key','paid','pay_v10','2026-01-01',1);
+    INSERT INTO stock_reservations (attempt_id,service_date,menu_item_id,quantity)
+      VALUES (1,'2026-01-01',1,2);`)
+  db.close()
+
+  db = initializeDatabase(file)
+  try {
+    assert.equal(db.prepare('SELECT status FROM stock_reservations WHERE attempt_id=1').get().status, 'consumed')
+    assert.equal(db.prepare('SELECT order_id FROM payment_attempts WHERE id=1').get().order_id, 1)
+    assert.equal(db.prepare('SELECT token FROM orders WHERE id=1').get().token, 'v10-token')
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION)
+  } finally { db.close() }
+})
+
 test('Cashfree expired or terminated sessions become terminal only from provider confirmation', async (t) => {
   for (const [orderStatus, expected] of [['EXPIRED', 'expired'], ['TERMINATED', 'cancelled']]) {
     const { db, provider, state } = setup(t)

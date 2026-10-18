@@ -8,6 +8,7 @@ import {
   getPaymentStatus,
   handlePaymentWebhook,
   initiatePayment,
+  listPaymentReconciliationHolds,
   verifyPayment,
 } from '../services/payments.js'
 import {
@@ -38,6 +39,21 @@ export async function handlePaymentRoutes(
   paymentConfig,
   paymentProvider,
 ) {
+  if (requestUrl.pathname === '/api/owner/payment-reconciliation') {
+    if (request.method !== 'GET') {
+      sendMethodNotAllowed(response, ['GET'])
+      return true
+    }
+    requireRole(
+      database,
+      optionalAuth(database, request, authConfig),
+      ROLES.OWNER,
+      request,
+    )
+    sendJson(response, 200, listPaymentReconciliationHolds(database))
+    return true
+  }
+
   if (['/api/payments/webhook/razorpay', '/api/payments/webhook/cashfree'].includes(requestUrl.pathname)) {
     if (request.method !== 'POST') {
       sendMethodNotAllowed(response, ['POST'])

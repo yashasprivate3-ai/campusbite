@@ -89,6 +89,58 @@ function selectAttempt(database, publicId) {
   return database.prepare('SELECT * FROM payment_attempts WHERE public_id = ?').get(publicId)
 }
 
+export function listPaymentReconciliationHolds(database, now = new Date()) {
+  const rows = database.prepare(`
+    SELECT p.id, p.public_id, p.provider, p.provider_order_id,
+      p.provider_payment_id, p.status, p.amount_paise, p.currency,
+      p.expires_at, p.created_at, p.updated_at,
+      r.service_date, r.menu_item_id, r.quantity
+    FROM payment_attempts p
+    JOIN stock_reservations r ON r.attempt_id = p.id
+    WHERE r.status = 'held'
+      AND p.order_id IS NULL
+      AND (
+        p.status IN ('failed', 'cancelled', 'expired')
+        OR julianday(p.expires_at) <= julianday(?)
+      )
+    ORDER BY p.updated_at ASC, p.id ASC, r.menu_item_id ASC
+  `).all(now.toISOString())
+
+  const byAttempt = new Map()
+  for (const row of rows) {
+    let attempt = byAttempt.get(row.id)
+    if (!attempt) {
+      attempt = {
+        attemptId: row.public_id,
+        provider: row.provider,
+        providerOrderId: row.provider_order_id,
+        providerPaymentId: row.provider_payment_id || null,
+        localStatus: row.status,
+        amountPaise: row.amount_paise,
+        currency: row.currency,
+        expiresAt: normalizeTimestamp(row.expires_at),
+        createdAt: normalizeTimestamp(row.created_at),
+        updatedAt: normalizeTimestamp(row.updated_at),
+        reason: TERMINAL_STATUSES.has(row.status)
+          ? `local_${row.status}_provider_confirmation_required`
+          : 'local_expiry_provider_confirmation_required',
+        reservations: [],
+      }
+      byAttempt.set(row.id, attempt)
+    }
+    attempt.reservations.push({
+      serviceDate: row.service_date,
+      menuItemId: row.menu_item_id,
+      quantity: row.quantity,
+    })
+  }
+
+  return {
+    automaticReleaseEnabled: false,
+    holds: [...byAttempt.values()],
+  }
+}
+
 function requireOwnedAttempt(database, publicId, studentUserId) {
   const id = requireString(publicId, 'attemptId', { minLength: 8, maxLength: 100 })
   const attempt = selectAttempt(database, id)

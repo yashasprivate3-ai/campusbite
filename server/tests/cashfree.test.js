@@ -5,7 +5,8 @@ import { test } from 'node:test'
 import { createHmac } from 'node:crypto'
 import { initializeDatabase, SCHEMA_VERSION } from '../db.js'
 import { createCashfreeProvider } from '../services/cashfreeProvider.js'
-import { initiatePayment, verifyPayment, handlePaymentWebhook, getPaymentStatus } from '../services/payments.js'
+import { initiatePayment, verifyPayment, handlePaymentWebhook, getPaymentStatus,
+  listPaymentReconciliationHolds } from '../services/payments.js'
 
 const config = { orderingClock, enabled: true, provider: 'cashfree', publicAppUrl: 'https://example.com',
   cashfree: { environment: 'sandbox', clientId: 'synthetic-id', clientSecret: 'synthetic-secret' } }
@@ -230,5 +231,11 @@ test('Cashfree expired or terminated sessions become terminal only from provider
     state.orderStatus = orderStatus
     assert.equal((await getPaymentStatus(db, a.attemptId, 1, config, provider)).status, expected)
     assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
+    const reconciliation = listPaymentReconciliationHolds(db)
+    assert.equal(reconciliation.automaticReleaseEnabled, false)
+    assert.equal(reconciliation.holds.length, 1)
+    assert.equal(reconciliation.holds[0].attemptId, a.attemptId)
+    assert.equal(reconciliation.holds[0].provider, 'cashfree')
+    assert.equal(db.prepare('SELECT status FROM stock_reservations').get().status, 'held')
   }
 })

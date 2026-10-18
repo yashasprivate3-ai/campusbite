@@ -8,10 +8,12 @@ import { createHmac } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { handlePaymentRoutes } from '../routes/payments.js'
 import { readRawBody } from '../services/http.js'
+import { createSession } from '../services/auth.js'
 import {
   getPaymentStatus,
   handlePaymentWebhook,
   initiatePayment,
+  listPaymentReconciliationHolds,
   verifyPayment,
 } from '../services/payments.js'
 import { createRazorpayProvider } from '../services/razorpayProvider.js'
@@ -303,6 +305,55 @@ test('multi-item captured fulfillment validates and consumes every exact reserva
     { menuItemId: 1, quantity: 2, status: 'consumed' },
     { menuItemId: 2, quantity: 3, status: 'consumed' },
   ])
+})
+
+test('reconciliation report identifies unresolved holds without releasing stock', async () => {
+  const database = createDatabase()
+  const gateway = provider()
+  const expired = await initiatePayment(database, payload('reconcile-expired'), 1, paymentConfig, gateway)
+  await initiatePayment(database, payload('reconcile-active'), 1, paymentConfig, gateway)
+  database.prepare("UPDATE payment_attempts SET status = 'expired' WHERE public_id = ?").run(expired.attemptId)
+
+  const report = listPaymentReconciliationHolds(database, new Date())
+  assert.equal(report.automaticReleaseEnabled, false)
+  assert.equal(report.holds.length, 1)
+  assert.equal(report.holds[0].attemptId, expired.attemptId)
+  assert.equal(report.holds[0].provider, 'razorpay')
+  assert.equal(report.holds[0].localStatus, 'expired')
+  assert.deepEqual(report.holds[0].reservations, [
+    { serviceDate: '2099-10-17', menuItemId: 1, quantity: 2 },
+  ])
+  assert.equal(database.prepare("SELECT count(*) AS count FROM stock_reservations WHERE status = 'held'").get().count, 2)
+})
+
+test('owner reconciliation route is read-only and owner-restricted', async () => {
+  const database = createDatabase()
+  const attempt = await initiatePayment(database, payload('reconcile-owner'), 1, paymentConfig, provider())
+  database.prepare("UPDATE payment_attempts SET status = 'failed' WHERE public_id = ?").run(attempt.attemptId)
+  database.prepare(`INSERT INTO users
+    (public_id, role, display_name, phone_number, phone_verified, status)
+    VALUES ('reconciliation-owner', 'OWNER', 'Owner', '+919000000003', 1, 'ACTIVE')`).run()
+  const authConfig = { cookieName: 'reconciliation_session', cookieSecure: false,
+    sessionTtlHours: 1, sessionTouchMinutes: 15 }
+  const request = { method: 'GET', url: '/api/owner/payment-reconciliation',
+    headers: { 'user-agent': 'reconciliation-test' }, socket: { remoteAddress: '127.0.0.1' } }
+  const session = createSession(database, 3, request, authConfig)
+  request.headers.cookie = `${authConfig.cookieName}=${session.rawToken}`
+  let statusCode
+  let responseBody
+  const response = { writeHead(status) { statusCode = status }, end(body) { responseBody = body } }
+
+  assert.equal(await handlePaymentRoutes(request, response, new URL(`http://localhost${request.url}`),
+    database, authConfig, paymentConfig, provider()), true)
+  assert.equal(statusCode, 200)
+  const report = JSON.parse(responseBody)
+  assert.equal(report.automaticReleaseEnabled, false)
+  assert.equal(report.holds[0].attemptId, attempt.attemptId)
+  assert.equal(database.prepare('SELECT status FROM stock_reservations').get().status, 'held')
+
+  await assert.rejects(handlePaymentRoutes({ method: 'GET', url: request.url, headers: {}, socket: {} }, {},
+    new URL(`http://localhost${request.url}`), database, authConfig, paymentConfig, provider()),
+  { statusCode: 401, code: 'authentication_required' })
 })
 
 test('ownership and invalid signatures are rejected without creating orders', async () => {

@@ -1,5 +1,6 @@
 ﻿import { TRUSTED_MENU } from '../data/menu.js'
 import { ApiError, invalidRequest } from './apiError.js'
+import { recordAuthEvent } from './auth.js'
 import { campusDate } from '../../shared/pickupPolicy.js'
 
 export function getOwnerStock(database, now = new Date()) {
@@ -42,7 +43,7 @@ GROUP BY m.menu_item_id, m.quantity
   }
 }
 
-export function confirmOwnerStock(database, items, now = new Date()) {
+export function confirmOwnerStock(database, items, now = new Date(), ownerUserId = null) {
   if (!Array.isArray(items) || items.length === 0) {
     throw invalidRequest('Provide at least one stock item.')
   }
@@ -98,8 +99,15 @@ WHERE service_date = ?
       DO UPDATE SET quantity = excluded.quantity
     `)
 
+    const previousQuantityStatement = database.prepare(`
+      SELECT quantity
+      FROM daily_menu_stock
+      WHERE service_date = ? AND menu_item_id = ?
+    `)
+
     for (const item of items) {
       const { reserved } = reservedStatement.get(serviceDate, item.id)
+      const previous = previousQuantityStatement.get(serviceDate, item.id)
 
       if (item.quantity < reserved) {
         throw new ApiError(
@@ -109,7 +117,26 @@ WHERE service_date = ?
         )
       }
 
+      if (previous?.quantity === item.quantity) continue
+
       upsertStatement.run(serviceDate, item.id, item.quantity)
+
+      if (Number.isSafeInteger(ownerUserId) && ownerUserId > 0) {
+        recordAuthEvent(database, {
+          eventType: 'STOCK_UPDATED',
+          success: true,
+          userId: ownerUserId,
+          metadata: {
+            itemId: item.id,
+            newQuantity: item.quantity,
+            outcome: 'succeeded',
+            previousQuantity: previous?.quantity ?? 'unconfirmed',
+            serviceDate,
+            source: 'owner_web',
+            transactionId: `stock:${serviceDate}:${item.id}`,
+          },
+        })
+      }
     }
 
     database.exec('COMMIT;')

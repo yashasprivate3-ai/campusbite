@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 11
+const SCHEMA_VERSION = 12
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -398,6 +398,17 @@ function migrateToVersion11(database) {
     );`)
 }
 
+function migrateToVersion12(database) {
+  database.exec(`CREATE TABLE IF NOT EXISTS msg91_access_token_uses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    consumed_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_msg91_access_token_uses_user
+    ON msg91_access_token_uses(user_id, consumed_at);`)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -448,6 +459,7 @@ export function initializeDatabase(databasePath) {
     if (currentVersion < 9) migrateToVersion9(database)
     if (currentVersion < 10) migrateToVersion10(database)
     if (currentVersion < 11) migrateToVersion11(database)
+    if (currentVersion < 12) migrateToVersion12(database)
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
     database.exec('COMMIT;')

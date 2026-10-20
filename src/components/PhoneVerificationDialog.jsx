@@ -1,9 +1,16 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/useAuth.js'
 import {
   requestPhoneVerification,
+  verifyMsg91PhoneVerification,
   verifyPhoneVerification,
 } from '../services/authApi.js'
+import {
+  isMsg91WidgetEnabled,
+  retryMsg91Otp,
+  sendMsg91Otp,
+  verifyMsg91Otp,
+} from '../services/msg91Widget.js'
 
 function maskPhoneNumber(phoneNumber) {
   if (!phoneNumber) return 'your saved phone'
@@ -25,6 +32,7 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
   const [isVerifying, setIsVerifying] = useState(false)
   const [verified, setVerified] = useState(Boolean(user.phoneVerified))
   const [now, setNow] = useState(Date.now())
+  const challengeRef = useRef(null)
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
@@ -35,6 +43,7 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
   const expiresSeconds = secondsUntil(challenge?.expiresAt, now)
   const maskedPhone = challenge?.maskedPhone || maskPhoneNumber(user.phoneNumber)
   const codeIsValid = /^\d{6}$/.test(code)
+  const msg91Enabled = isMsg91WidgetEnabled()
 
   const requestCode = useCallback(async () => {
     setIsRequesting(true)
@@ -42,12 +51,25 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
     setMessage('')
 
     try {
-      const nextChallenge = await requestPhoneVerification()
+      let nextChallenge
+      if (msg91Enabled) {
+        if (challengeRef.current) await retryMsg91Otp()
+        else await sendMsg91Otp(user.phoneNumber)
+        nextChallenge = {
+          maskedPhone: maskPhoneNumber(user.phoneNumber),
+          provider: 'msg91',
+        }
+      } else {
+        nextChallenge = await requestPhoneVerification()
+      }
+      challengeRef.current = nextChallenge
       setChallenge(nextChallenge)
       setCode('')
       setMessage(
         nextChallenge.provider === 'meta-whatsapp'
           ? 'Verification code sent to WhatsApp.'
+          : nextChallenge.provider === 'msg91'
+            ? 'Verification code sent securely.'
           : 'Verification code requested securely.',
       )
       setNow(Date.now())
@@ -63,7 +85,7 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
     } finally {
       setIsRequesting(false)
     }
-  }, [user.phoneNumber])
+  }, [msg91Enabled, user.phoneNumber])
 
   useEffect(() => {
     if (!autoRequest) return
@@ -85,7 +107,12 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
     setMessage('')
 
     try {
-      await verifyPhoneVerification(code)
+      if (msg91Enabled) {
+        const accessToken = await verifyMsg91Otp(code)
+        await verifyMsg91PhoneVerification(accessToken)
+      } else {
+        await verifyPhoneVerification(code)
+      }
       const refreshedUser = await refreshSession()
       if (!refreshedUser?.phoneVerified) return
       setVerified(true)
@@ -155,6 +182,8 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
                 {message}
               </div>
             )}
+
+            {msg91Enabled && <div id="msg91-captcha" />}
 
             {!challenge ? (
               <button

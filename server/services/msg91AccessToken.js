@@ -1,47 +1,73 @@
-const ENDPOINT = 'https://control.msg91.com/api/v5/widget/verifyAccessToken'
-const DIAGNOSTIC_FIELDS = new Set(['type', 'code', 'message', 'data', 'identifier', 'mobile', 'phone', 'phoneNumber'])
+import { ApiError } from './apiError.js'
 
-// Diagnostic only: no response shape has yet been established as authoritative.
-// This function must never be used as an authorization decision.
+const ENDPOINT = 'https://api.msg91.com/api/v5/widget/verifyAccessToken'
+
+function normalizeAccessToken(accessToken) {
+  if (
+    typeof accessToken !== 'string' ||
+    !accessToken.trim() ||
+    accessToken.length > 8192
+  ) {
+    throw new ApiError(400, 'msg91_access_token_invalid', 'MSG91 verification could not be completed.')
+  }
+  return accessToken.trim()
+}
+
+function normalizeVerifiedMobile(value) {
+  if (typeof value !== 'string' || !/^\d{8,15}$/.test(value)) {
+    throw new ApiError(502, 'msg91_response_invalid', 'MSG91 verification could not be completed.')
+  }
+  return `+${value}`
+}
+
+export function createMsg91AccessTokenVerifier(
+  { authkey, requestTimeoutMilliseconds = 8000 },
+  fetchImplementation = fetch,
+) {
+  const serverAuthkey = String(authkey || '').trim()
+  if (!serverAuthkey) {
+    throw new Error('CAMPUSBITE_MSG91_AUTHKEY is required for MSG91 verification.')
+  }
+
+  return async function verifyAccessToken(value) {
+    const accessToken = normalizeAccessToken(value)
+    let response
+    let data
+
+    try {
+      response = await fetchImplementation(ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          authkey: serverAuthkey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 'access-token': accessToken }),
+        redirect: 'error',
+        signal: AbortSignal.timeout(requestTimeoutMilliseconds),
+      })
+      if (!response.ok) throw new Error('Provider rejected request')
+      data = await response.json()
+    } catch {
+      // Provider bodies, tokens and credentials must never cross this boundary.
+      throw new ApiError(502, 'msg91_verification_failed', 'MSG91 verification could not be completed.')
+    }
+
+    if (data?.type === 'error' && data.code === 702) {
+      throw new ApiError(409, 'msg91_access_token_reused', 'This MSG91 verification has already been used.')
+    }
+
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data.type !== 'success') {
+      throw new ApiError(502, 'msg91_response_invalid', 'MSG91 verification could not be completed.')
+    }
+
+    return Object.freeze({ phoneNumber: normalizeVerifiedMobile(data.message) })
+  }
+}
+
 export async function checkMsg91AccessToken(accessToken, authkey, fetchImplementation = fetch) {
-  if (typeof accessToken !== 'string' || !accessToken.trim() || accessToken.length > 8192) {
-    throw new Error('MSG91 access token missing or invalid')
-  }
-  if (typeof authkey !== 'string' || !authkey.trim()) {
-    throw new Error('MSG91 server Authkey is not configured')
-  }
-
-  let response
-  let data
-  try {
-    response = await fetchImplementation(ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ authkey, 'access-token': accessToken }),
-      redirect: 'error',
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!response.ok) throw new Error('Provider rejected request')
-    data = await response.json()
-  } catch {
-    // Never propagate provider messages, request bodies, tokens or credentials.
-    throw new Error('MSG91 server verification failed')
-  }
-
-  if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    throw new Error('MSG91 response has unexpected shape')
-  }
-  if (data.type === 'error' || Object.hasOwn(data, 'error')) {
-    throw new Error('MSG91 server verification failed')
-  }
-
-  return {
-    // Allowlist keys too: an arbitrary provider key may itself contain private data.
-    responseFields: Object.keys(data).filter(field => DIAGNOSTIC_FIELDS.has(field)).sort().map(field => ({
-      field,
-      type: Array.isArray(data[field]) ? 'array' : data[field] === null ? 'null' : typeof data[field],
-    })),
-    phoneVerified: false,
-    authorizationGranted: false,
-  }
+  return createMsg91AccessTokenVerifier(
+    { authkey, requestTimeoutMilliseconds: 8000 },
+    fetchImplementation,
+  )(accessToken)
 }

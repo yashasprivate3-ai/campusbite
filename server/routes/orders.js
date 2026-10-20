@@ -101,7 +101,7 @@ export async function handleOrderRoutes(
       return true
     }
 
-    requireAnyRole(
+    const authContext = requireAnyRole(
       database,
       optionalAuth(database, request, authConfig),
       [ROLES.OWNER, ROLES.KITCHEN],
@@ -111,6 +111,8 @@ export async function handleOrderRoutes(
       database,
       parseOrderId(statusMatch[1]),
       await readJsonBody(request),
+      authContext.internalUserId,
+      authContext.user.role === ROLES.OWNER ? 'owner_web' : 'kitchen_web',
     )
     sendJson(response, 200, { order })
     return true

@@ -43,6 +43,22 @@ function normalizeOtp(payload) {
   return payload.code
 }
 
+function normalizeMsg91AccessToken(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw invalidRequest('Request body must be an object.')
+  }
+
+  if (
+    typeof payload.accessToken !== 'string' ||
+    !payload.accessToken.trim() ||
+    payload.accessToken.length > 8192
+  ) {
+    throw new ApiError(400, 'msg91_access_token_invalid', 'MSG91 verification could not be completed.')
+  }
+
+  return payload.accessToken.trim()
+}
+
 function getStudentPhone(database, userId) {
   return database
     .prepare(
@@ -128,6 +144,14 @@ export async function requestPhoneVerification(
   config,
   provider,
 ) {
+  if (provider.name === 'msg91') {
+    throw new ApiError(
+      409,
+      'msg91_widget_required',
+      'Complete phone verification through the MSG91 verification flow.',
+    )
+  }
+
   const student = requireStudentPhone(database, userId)
   const phoneNumber = student.phone_number
 
@@ -463,6 +487,81 @@ export function verifyPhoneCode(database, userId, payload, config) {
 
   return {
     maskedPhone: maskPhoneNumber(phoneNumber),
+    user: getSafeUserById(database, userId),
+    verified: true,
+  }
+}
+
+export async function verifyMsg91Phone(database, userId, payload, config, provider) {
+  if (provider?.name !== 'msg91' || typeof provider.verifyAccessToken !== 'function') {
+    throw new ApiError(409, 'msg91_not_configured', 'MSG91 verification is not configured.')
+  }
+
+  const accessToken = normalizeMsg91AccessToken(payload)
+  const tokenHash = createHmacHex(config.hashSecret, `msg91:${accessToken}`)
+
+  if (database.prepare('SELECT 1 FROM msg91_access_token_uses WHERE token_hash = ?').get(tokenHash)) {
+    throw new ApiError(409, 'msg91_access_token_reused', 'This MSG91 verification has already been used.')
+  }
+
+  const student = requireStudentPhone(database, userId)
+  if (student.phone_verified) {
+    throw new ApiError(409, 'phone_already_verified', 'This phone number is already verified.')
+  }
+
+  const verifiedIdentity = await provider.verifyAccessToken(accessToken)
+  const now = new Date().toISOString()
+  let outcome
+
+  database.exec('BEGIN IMMEDIATE;')
+  try {
+    if (database.prepare('SELECT 1 FROM msg91_access_token_uses WHERE token_hash = ?').get(tokenHash)) {
+      outcome = new ApiError(409, 'msg91_access_token_reused', 'This MSG91 verification has already been used.')
+    } else {
+      const currentStudent = requireStudentPhone(database, userId)
+      database.prepare(
+        `INSERT INTO msg91_access_token_uses
+          (token_hash, user_id, consumed_at) VALUES (?, ?, ?)`,
+      ).run(tokenHash, userId, now)
+
+      if (currentStudent.phone_verified) {
+        outcome = new ApiError(409, 'phone_already_verified', 'This phone number is already verified.')
+      } else if (verifiedIdentity.phoneNumber !== currentStudent.phone_number) {
+        recordFailure(database, userId, 'msg91_phone_mismatch', currentStudent.phone_number, { provider: 'msg91' })
+        outcome = new ApiError(409, 'msg91_phone_mismatch', 'The verified phone does not match this account.')
+      } else if (database.prepare(
+        `SELECT id FROM users
+          WHERE phone_number = ? AND phone_verified = 1 AND id != ?
+          LIMIT 1`,
+      ).get(currentStudent.phone_number, userId)) {
+        recordFailure(database, userId, 'phone_unavailable', currentStudent.phone_number, { provider: 'msg91' })
+        outcome = new ApiError(409, 'phone_unavailable', 'This phone number cannot be verified for this account.')
+      } else {
+        const update = database.prepare(
+          `UPDATE users
+              SET phone_verified = 1, phone_verified_at = ?, updated_at = ?
+            WHERE id = ? AND phone_number = ? AND phone_verified = 0`,
+        ).run(now, now, userId, currentStudent.phone_number)
+        if (update.changes !== 1) throw new Error('MSG91 phone activation lost its account binding.')
+        recordAuthEvent(database, {
+          eventType: 'PHONE_VERIFICATION_SUCCEEDED',
+          success: true,
+          userId,
+          metadata: { provider: 'msg91' },
+        })
+      }
+    }
+
+    database.exec('COMMIT;')
+  } catch (error) {
+    database.exec('ROLLBACK;')
+    throw error
+  }
+
+  if (outcome) throw outcome
+
+  return {
+    maskedPhone: maskPhoneNumber(verifiedIdentity.phoneNumber),
     user: getSafeUserById(database, userId),
     verified: true,
   }

@@ -1,6 +1,7 @@
 import { itemStatus } from '../../shared/batchPolicy.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { ApiError, invalidRequest } from './apiError.js'
+import { recordAuthEvent } from './auth.js'
 
 export const ORDER_STATUSES = Object.freeze(['new', 'preparing', 'ready'])
 
@@ -496,7 +497,13 @@ export function getOrder(database, orderId, studentUserId) {
   return order
 }
 
-export function updateOrderStatus(database, orderId, payload) {
+export function updateOrderStatus(
+  database,
+  orderId,
+  payload,
+  actorUserId = null,
+  source = 'kitchen_web',
+) {
   requireObject(payload, 'Request body')
   const nextStatus = requireString(payload.status, 'status', { maxLength: 20 })
 
@@ -563,6 +570,23 @@ export function updateOrderStatus(database, orderId, payload) {
         nextStatus === 'ready' ? 'order_ready' : 'order_preparing',
         batchItem || currentOrder.token,
       )
+
+    if (Number.isSafeInteger(actorUserId) && actorUserId > 0) {
+      recordAuthEvent(database, {
+        eventType: 'ORDER_STATUS_UPDATED',
+        success: true,
+        userId: actorUserId,
+        metadata: {
+          customerId: currentOrder.student_user_id ?? 'unassigned',
+          newStatus: nextStatus,
+          outcome: 'succeeded',
+          previousStatus: currentOrder.status,
+          source,
+          transactionId: currentOrder.token,
+          ...(batchItem ? { item: batchItem } : {}),
+        },
+      })
+    }
 
     database.exec('COMMIT;')
     return getOrderOrNull(database, orderId)

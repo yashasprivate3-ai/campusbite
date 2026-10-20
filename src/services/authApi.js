@@ -47,6 +47,13 @@ export async function verifyPhoneVerification(code) {
   })
 }
 
+export async function verifyMsg91PhoneVerification(accessToken) {
+  return apiRequest('/api/auth/phone-verification/msg91/verify', {
+    method: 'POST',
+    body: JSON.stringify({ accessToken }),
+  })
+}
+
 export async function logoutSession() {
   return apiRequest('/api/auth/logout', {
     method: 'POST',

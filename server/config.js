@@ -256,6 +256,15 @@ export const serverConfig = Object.freeze({
       maxAttempts: 5,
       userPhoneRequestsPerHour: 5,
       ipRequestsPerHour: 20,
+      msg91: Object.freeze({
+        authkey: String(process.env.CAMPUSBITE_MSG91_AUTHKEY || '').trim(),
+        requestTimeoutMilliseconds: readInteger(
+          process.env.CAMPUSBITE_MSG91_REQUEST_TIMEOUT_MS,
+          8_000,
+          'CAMPUSBITE_MSG91_REQUEST_TIMEOUT_MS',
+          { min: 1_000, max: 30_000 },
+        ),
+      }),
       metaWhatsApp: Object.freeze({
         accessToken: String(
           process.env.CAMPUSBITE_META_WHATSAPP_ACCESS_TOKEN || '',

@@ -301,6 +301,82 @@ test('authenticated owner can update stock through PUT route', async t => {
 
   const saved = getOwnerStock(db, routeNow).items.find(entry => entry.id === 1)
   assert.equal(saved.quantity, 15)
+
+  const audit = db.prepare(`
+    SELECT e.event_type, e.success, e.metadata_json, u.role
+    FROM auth_events e
+    JOIN users u ON u.id = e.user_id
+    WHERE e.event_type = 'STOCK_UPDATED'
+  `).get()
+  assert.equal(audit.role, 'OWNER')
+  assert.equal(audit.success, 1)
+  assert.deepEqual(JSON.parse(audit.metadata_json), {
+    itemId: '1',
+    newQuantity: '15',
+    outcome: 'succeeded',
+    previousQuantity: 'unconfirmed',
+    serviceDate: campusDate(routeNow),
+    source: 'owner_web',
+    transactionId: `stock:${campusDate(routeNow)}:1`,
+  })
+})
+
+test('failed owner stock changes roll back their protected audit events', t => {
+  const db = setup(t)
+  const owner = db.prepare(`INSERT INTO users
+    (public_id, role, display_name, status)
+    VALUES ('stock-audit-owner', 'OWNER', 'Stock Audit Owner', 'ACTIVE')`).run()
+  const ownerId = Number(owner.lastInsertRowid)
+
+  confirmOwnerStock(db, [{ id: 1, quantity: 10 }], now, ownerId)
+  createTestReservation(db, 1, 5, 950)
+
+  assert.throws(
+    () => confirmOwnerStock(db, [{ id: 1, quantity: 4 }], now, ownerId),
+    { code: 'stock_below_reservations' },
+  )
+  assert.equal(
+    db.prepare("SELECT count(*) AS count FROM auth_events WHERE event_type LIKE 'STOCK_%'").get().count,
+    1,
+  )
+})
+
+test('stock audit insertion failure rolls back the stock mutation', t => {
+  const db = setup(t)
+  const owner = db.prepare(`INSERT INTO users
+    (public_id, role, display_name, status)
+    VALUES ('stock-audit-failure-owner', 'OWNER', 'Stock Audit Failure Owner', 'ACTIVE')`).run()
+  db.exec(`CREATE TRIGGER reject_stock_audit
+    BEFORE INSERT ON auth_events
+    WHEN NEW.event_type = 'STOCK_UPDATED'
+    BEGIN
+      SELECT RAISE(ABORT, 'synthetic stock audit failure');
+    END;`)
+
+  assert.throws(
+    () => confirmOwnerStock(db, [{ id: 1, quantity: 10 }], now, Number(owner.lastInsertRowid)),
+    /synthetic stock audit failure/,
+  )
+  assert.equal(
+    db.prepare('SELECT count(*) AS count FROM daily_menu_stock').get().count,
+    0,
+  )
+})
+
+test('same-quantity stock submission does not create a duplicate success event', t => {
+  const db = setup(t)
+  const owner = db.prepare(`INSERT INTO users
+    (public_id, role, display_name, status)
+    VALUES ('stock-noop-owner', 'OWNER', 'Stock No-op Owner', 'ACTIVE')`).run()
+  const ownerId = Number(owner.lastInsertRowid)
+
+  confirmOwnerStock(db, [{ id: 1, quantity: 10 }], now, ownerId)
+  confirmOwnerStock(db, [{ id: 1, quantity: 10 }], now, ownerId)
+
+  assert.equal(
+    db.prepare("SELECT count(*) AS count FROM auth_events WHERE event_type = 'STOCK_UPDATED'").get().count,
+    1,
+  )
 })
 test('held and consumed stock remains committed while released stock becomes available', t => {
   const db = setup(t)

@@ -19,7 +19,7 @@ export async function handleOwnerStockRoutes(
     return true
   }
 
-  requireRole(
+  const authContext = requireRole(
     database,
     optionalAuth(database, request, authConfig),
     ROLES.OWNER,
@@ -37,7 +37,12 @@ export async function handleOwnerStockRoutes(
     throw invalidRequest('Provide an items array.')
   }
 
-  const result = confirmOwnerStock(database, body.items)
+  const result = confirmOwnerStock(
+    database,
+    body.items,
+    new Date(),
+    authContext.internalUserId,
+  )
   sendJson(response, 200, result)
   return true
 }

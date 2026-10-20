@@ -1,4 +1,5 @@
 import { createMetaWhatsAppProvider } from './metaWhatsappProvider.js'
+import { createMsg91AccessTokenVerifier } from './msg91AccessToken.js'
 
 function createDevelopmentProvider(config) {
   if (config.isProduction) {
@@ -29,5 +30,12 @@ export function createPhoneVerificationProvider(config, isProduction) {
     return createMetaWhatsAppProvider(providerConfig.metaWhatsApp)
   }
 
-  throw new Error('MSG91 OTP integration is not enabled yet.')
+  if (config.provider === 'msg91') {
+    return Object.freeze({
+      name: 'msg91',
+      verifyAccessToken: createMsg91AccessTokenVerifier(config.msg91),
+    })
+  }
+
+  throw new Error('Unsupported phone verification provider.')
 }

@@ -9,6 +9,8 @@ import { pickupWindows, validatePickup, campusDate } from '../../shared/pickupPo
 import { calculateBatches } from '../../src/utils/batchCalculator.js'
 import { getProductionSummaryBatches, createBatchSnapshot, startBatchRecord, findActiveBatchRecord } from '../../src/utils/kitchenIntelligence.js'
 import { sanitizeCart } from '../../src/utils/cartState.js'
+import { createSession } from '../services/auth.js'
+import { handleOrderRoutes } from '../routes/orders.js'
 
 const noon = new Date('2026-10-17T12:00:00+05:30')
 function setup(t, stock = 20, now = noon) {
@@ -154,6 +156,113 @@ test('mixed-item order becomes READY only after each item finishes, with strict 
   assert.throws(()=>updateOrderStatus(db,id,{status:'preparing',batchItem:'Samosa'}),{code:'invalid_status_transition'})
   assert.throws(()=>updateOrderStatus(db,id,{status:'ready',batchItem:'Not on order'}),{code:'invalid_request'})
   assert.equal(getOrder(db,id).status,'ready')
+})
+
+test('kitchen status changes create atomic protected audit events', t => {
+  const { db } = setup(t)
+  const kitchen = db.prepare(`INSERT INTO users
+    (public_id, role, display_name, status)
+    VALUES ('audit-kitchen', 'KITCHEN', 'Audit Kitchen', 'ACTIVE')`).run()
+  const order = db.prepare(`INSERT INTO orders
+    (token, student_user_id, pickup_method, total_amount, status)
+    VALUES ('AUDIT-ORDER', 1, 'asap', 7000, 'new')`).run()
+  const orderId = Number(order.lastInsertRowid)
+  db.prepare("INSERT INTO order_items (order_id, item_name, quantity) VALUES (?, 'Samosa', 1)").run(orderId)
+  db.prepare("INSERT INTO status_history (order_id, status) VALUES (?, 'new')").run(orderId)
+
+  updateOrderStatus(db, orderId, { status: 'preparing' }, Number(kitchen.lastInsertRowid))
+  const audit = db.prepare("SELECT * FROM auth_events WHERE event_type = 'ORDER_STATUS_UPDATED'").get()
+  assert.equal(audit.user_id, Number(kitchen.lastInsertRowid))
+  assert.equal(audit.success, 1)
+  assert.deepEqual(JSON.parse(audit.metadata_json), {
+    customerId: '1',
+    newStatus: 'preparing',
+    outcome: 'succeeded',
+    previousStatus: 'new',
+    source: 'kitchen_web',
+    transactionId: 'AUDIT-ORDER',
+  })
+
+  assert.throws(
+    () => updateOrderStatus(db, orderId, { status: 'preparing' }, Number(kitchen.lastInsertRowid)),
+    { code: 'invalid_status_transition' },
+  )
+  assert.equal(
+    db.prepare("SELECT count(*) AS count FROM auth_events WHERE event_type = 'ORDER_STATUS_UPDATED'").get().count,
+    1,
+  )
+})
+
+test('order audit insertion failure rolls back the status mutation', t => {
+  const { db } = setup(t)
+  const kitchen = db.prepare(`INSERT INTO users
+    (public_id, role, display_name, status)
+    VALUES ('audit-failure-kitchen', 'KITCHEN', 'Audit Failure Kitchen', 'ACTIVE')`).run()
+  const order = db.prepare(`INSERT INTO orders
+    (token, student_user_id, pickup_method, total_amount, status)
+    VALUES ('AUDIT-FAILURE-ORDER', 1, 'asap', 7000, 'new')`).run()
+  const orderId = Number(order.lastInsertRowid)
+  db.prepare("INSERT INTO order_items (order_id, item_name, quantity) VALUES (?, 'Samosa', 1)").run(orderId)
+  db.prepare("INSERT INTO status_history (order_id, status) VALUES (?, 'new')").run(orderId)
+  db.exec(`CREATE TRIGGER reject_order_audit
+    BEFORE INSERT ON auth_events
+    WHEN NEW.event_type = 'ORDER_STATUS_UPDATED'
+    BEGIN
+      SELECT RAISE(ABORT, 'synthetic order audit failure');
+    END;`)
+
+  assert.throws(
+    () => updateOrderStatus(db, orderId, { status: 'preparing' }, Number(kitchen.lastInsertRowid)),
+    /synthetic order audit failure/,
+  )
+  assert.equal(db.prepare('SELECT status FROM orders WHERE id = ?').get(orderId).status, 'new')
+  assert.equal(db.prepare('SELECT count(*) AS count FROM status_history WHERE order_id = ?').get(orderId).count, 1)
+  assert.equal(db.prepare('SELECT count(*) AS count FROM activity_events WHERE order_id = ?').get(orderId).count, 0)
+})
+
+test('authenticated kitchen route records its session actor', async t => {
+  const { db } = setup(t)
+  const kitchen = db.prepare(`INSERT INTO users
+    (public_id, role, display_name, status)
+    VALUES ('route-audit-kitchen', 'KITCHEN', 'Route Audit Kitchen', 'ACTIVE')`).run()
+  const kitchenId = Number(kitchen.lastInsertRowid)
+  const order = db.prepare(`INSERT INTO orders
+    (token, student_user_id, pickup_method, total_amount, status)
+    VALUES ('ROUTE-AUDIT-ORDER', 1, 'asap', 7000, 'new')`).run()
+  const orderId = Number(order.lastInsertRowid)
+  db.prepare("INSERT INTO order_items (order_id, item_name, quantity) VALUES (?, 'Samosa', 1)").run(orderId)
+  db.prepare("INSERT INTO status_history (order_id, status) VALUES (?, 'new')").run(orderId)
+
+  const authConfig = {
+    cookieName: 'ordering_audit_session',
+    cookieSecure: false,
+    sessionTtlHours: 1,
+    sessionTouchMinutes: 15,
+  }
+  const request = {
+    method: 'PATCH',
+    url: `/api/orders/${orderId}/status`,
+    headers: { 'user-agent': 'ordering-audit-test' },
+    socket: { remoteAddress: '127.0.0.1' },
+  }
+  const session = createSession(db, kitchenId, request, authConfig)
+  request.headers.cookie = `${authConfig.cookieName}=${session.rawToken}`
+  request[Symbol.asyncIterator] = async function* () {
+    yield Buffer.from(JSON.stringify({ status: 'preparing' }))
+  }
+  const response = { writeHead() {}, end() {} }
+
+  await handleOrderRoutes(
+    request,
+    response,
+    new URL(request.url, 'http://localhost'),
+    db,
+    authConfig,
+  )
+
+  const audit = db.prepare("SELECT * FROM auth_events WHERE event_type = 'ORDER_STATUS_UPDATED'").get()
+  assert.equal(audit.user_id, kitchenId)
+  assert.equal(JSON.parse(audit.metadata_json).source, 'kitchen_web')
 })
 
 test('persisted cart rejects corrupt IDs, oversized quantities and non-object data', () => {

@@ -1,10 +1,9 @@
-# Railway backend / Vercel frontend: test-payment pilot
+# Railway backend / Vercel frontend deployment
 
-This configuration supports a production Node runtime with **Razorpay TEST mode**.
-It does not authorize real-money payments or certify staged provider credentials.
-Live environment values and live keys remain blocked. The existing live-readiness
-checklist in `SPRINT-8.2-RAZORPAY-TEST-PAYMENTS.md` remains a prerequisite for a
-separate reviewed live-mode change; completing it does not unlock live mode here.
+This configuration supports a production Node runtime. Keep payments **disabled**
+for the initial release; neither this guide nor a successful deployment authorizes
+test or real-money transactions. Enabling a payment provider requires separate
+founder approval and a reviewed payment-specific release.
 
 ## Railway backend
 
@@ -23,21 +22,24 @@ Verify these values privately before deploying the new commit:
 | `CAMPUSBITE_API_PORT` | Optional fallback, default `3001`; local development uses it and ignores `PORT` |
 | Public domain target port | Match the effective `PORT`, or fallback API port if `PORT` is absent |
 | `CAMPUSBITE_DB_PATH` | `/app/data/campusbite.db`; mount the persistent volume at `/app/data` |
-| `CAMPUSBITE_PAYMENT_PROVIDER` | `razorpay` |
-| `RAZORPAY_ENVIRONMENT` | `test` |
-| `RAZORPAY_KEY_ID` | Existing Test Mode key beginning `rzp_test_`; live keys are rejected |
-| `RAZORPAY_KEY_SECRET` | Matching private Test Mode secret, backend only |
+| `CAMPUSBITE_PAYMENT_PROVIDER` | `disabled` for this release |
 | `CAMPUSBITE_PUBLIC_APP_URL` | Canonical HTTPS **frontend** origin, not the Railway backend URL |
-| `CAMPUSBITE_OTP_PROVIDER` | `meta-whatsapp`; development OTP is still forbidden in production |
+| `CAMPUSBITE_OTP_PROVIDER` | The approved production provider, `msg91` or `meta-whatsapp`; development OTP is forbidden in production |
 | `CAMPUSBITE_OTP_HASH_SECRET` | Existing private secret of at least 32 characters |
 | `CAMPUSBITE_DEV_ACCOUNTS_ENABLED`, `CAMPUSBITE_DEV_RESET_PASSWORDS` | `false`; production disables both even if set true |
 
-Keep the existing private Meta access token, phone-number ID, WABA ID, approved
-authentication template name/language and pinned Graph API version configured
-using the `CAMPUSBITE_META_WHATSAPP_*` variables documented in
-`SPRINT-8.3-META-WHATSAPP-OTP.md`. Their validation and production guards have not
-changed. A successful health check does not establish that Meta credentials or
-template permissions work.
+Choose exactly one OTP provider and configure the matching frontend selection.
+For MSG91, set `CAMPUSBITE_OTP_PROVIDER=msg91` on Railway and
+`VITE_CAMPUSBITE_OTP_PROVIDER=msg91`, `VITE_MSG91_WIDGET_ID`, and
+`VITE_MSG91_TOKEN_AUTH` on Vercel. Keep `CAMPUSBITE_MSG91_AUTHKEY` private on
+Railway; never place it in a `VITE_*` variable. For Meta WhatsApp, set
+`CAMPUSBITE_OTP_PROVIDER=meta-whatsapp` and configure the private access token,
+phone-number ID, WABA ID, approved authentication template name/language and
+pinned Graph API version using the `CAMPUSBITE_META_WHATSAPP_*` variables
+documented in `SPRINT-8.3-META-WHATSAPP-OTP.md`. A successful health check does
+not establish provider delivery, widget origin authorization, sender permission
+or template availability. Verify OTP only with an authorized test recipient and
+explicit approval for that provider check.
 
 For Google login, preserve `CAMPUSBITE_GOOGLE_LOGIN_ENABLED=true` and identical
 `GOOGLE_CLIENT_ID` / `VITE_GOOGLE_CLIENT_ID` on the backend. Configure that same
@@ -88,27 +90,25 @@ environment files or database files with a frontend artifact.
    checks do **not** independently verify Railway's staged values, volume, target
    port, provider account or deployment source revision. Select this new commit,
    not `7cf0836`. No push or deployment is performed by this task.
-2. Once those settings are correct, deploy the backend for TEST integration and
-   check its HTTPS `/api/health`. Check restart persistence on the mounted volume.
-3. After its HTTPS endpoint exists, configure a **Test Mode** Razorpay webhook at
-   `https://<backend>/api/payments/webhook/razorpay`, subscribing to
-   `payment.captured` and `order.paid`. Privately configure the matching dedicated
-   `RAZORPAY_WEBHOOK_SECRET` in Railway and apply that configuration. No secret
-   was generated here. An absent secret deliberately leaves webhooks at 503;
-   it permits initial startup, but the payment pilot is not ready until signed
-   delivery is verified. The API key secret is not a webhook-secret substitute.
-4. Configure the Vercel backend origin and frontend variables, then deploy the
+2. Only after separate release approval, deploy the backend with payments
+   disabled and check its HTTPS `/api/health`, persistent-volume path, and restart
+   persistence. The first startup migrates the database, so do not start it
+   against production until the migration rehearsal and write-stop window are
+   approved.
+3. Configure the Vercel backend origin and frontend variables, then deploy the
    connected frontend. Verify `/api/health` through the frontend domain, Google
    login, authenticated refresh and logout. Inspect that cookies are host-only
    and retain all security attributes; authenticated responses must not cache.
-5. Test Meta OTP with an authorized recipient. Perform a Razorpay TEST checkout,
-   confirm only captured payments create an order, and replay a signed webhook.
-   Verify exactly one persisted order after duplicate delivery and restart.
-   These hosted/proxy/provider checks cannot be proven by local synthetic tests.
+4. Phone delivery and verification require a separately approved, controlled
+   provider check with an authorized real device. Local tests do not establish
+   real-phone delivery or widget/provider configuration.
+5. Keep payments disabled. Any future TEST checkout, webhook setup, or payment
+   activation requires its own explicit approval and release plan. Real-money
+   payments remain blocked unless separately approved.
 
 Do not declare the staged configuration safe solely because local checks pass.
-It is safe to return to Railway to review and complete the above settings; a
-backend TEST deployment is conditional on that verification. Real-money launch
+Hosted settings and provider behavior remain unverified; production changes are
+blocked until their specific release approvals are granted. Real-money launch
 remains blocked.
 
 ## Local verification

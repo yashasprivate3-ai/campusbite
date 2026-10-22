@@ -71,15 +71,19 @@ test('MSG91 provider requires a server AuthKey and preserves other provider sele
   assert.equal(typeof msg91.verifyAccessToken, 'function')
 })
 
-test('MSG91 verification uses the documented endpoint, header and body', async () => {
+test('MSG91 verification uses the documented endpoint, headers and JSON credentials', async () => {
   const result = await checkMsg91AccessToken(token, key, async (url, options) => {
-    assert.equal(url, 'https://api.msg91.com/api/v5/widget/verifyAccessToken')
+    assert.equal(url, 'https://control.msg91.com/api/v5/widget/verifyAccessToken')
     assert.equal(options.method, 'POST')
     assert.equal(options.redirect, 'error')
-    assert.equal(options.headers.authkey, key)
+    assert.equal(options.headers.authkey, undefined)
+    assert.equal(options.headers.Accept, 'application/json')
     assert.equal(options.headers['Content-Type'], 'application/json')
     assert.ok(options.signal instanceof AbortSignal)
-    assert.deepEqual(JSON.parse(options.body), { 'access-token': token })
+    assert.deepEqual(JSON.parse(options.body), {
+      authkey: key,
+      'access-token': token,
+    })
     return new Response('{"type":"success","message":"919000000010"}')
   })
   assert.deepEqual(result, { phoneNumber: '+919000000010' })
@@ -146,6 +150,21 @@ test('MSG91 provider failures are generic and never expose tokens, keys or phone
       return true
     })
   }
+})
+
+test('MSG91 timeout failures are generic and never expose credentials', async () => {
+  const verifier = createMsg91AccessTokenVerifier(
+    { authkey: key, requestTimeoutMilliseconds: 1000 },
+    async () => {
+      throw new DOMException(token + ' ' + key, 'TimeoutError')
+    },
+  )
+
+  await assert.rejects(verifier(token), error => {
+    assert.equal(error.code, 'msg91_verification_failed')
+    assert.doesNotMatch(error.message, /synthetic-access-token|synthetic-server-key/)
+    return true
+  })
 })
 
 test('MSG91 activation trusts only provider phone and binds it to the authenticated student', async () => {

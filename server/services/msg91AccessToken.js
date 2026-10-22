@@ -1,6 +1,6 @@
 import { ApiError } from './apiError.js'
 
-const ENDPOINT = 'https://api.msg91.com/api/v5/widget/verifyAccessToken'
+const ENDPOINT = 'https://control.msg91.com/api/v5/widget/verifyAccessToken'
 
 function normalizeAccessToken(accessToken) {
   if (
@@ -39,10 +39,12 @@ export function createMsg91AccessTokenVerifier(
         method: 'POST',
         headers: {
           Accept: 'application/json',
-          authkey: serverAuthkey,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 'access-token': accessToken }),
+        body: JSON.stringify({
+          authkey: serverAuthkey,
+          'access-token': accessToken,
+        }),
         redirect: 'error',
         signal: AbortSignal.timeout(requestTimeoutMilliseconds),
       })

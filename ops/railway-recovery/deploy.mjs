@@ -21,6 +21,7 @@ function json(command) {
   try { return JSON.parse(railway(command)) }
   catch { throw new Error('Railway read-only verification failed; deployment blocked.') }
 }
+async function main() {
 const gate = readGate()
 assert(process.env.RAILWAY_TOKEN, 'Missing environment-scoped Railway project token')
 assert(!process.env.RAILWAY_API_TOKEN, 'Account/workspace token forbidden')
@@ -119,3 +120,9 @@ try {
   }
   process.exitCode = 1
 }
+}
+
+main().catch(() => {
+  console.error('Release blocked during preflight. No production change was attempted. Inspect the private gate and target settings; raw values and errors are suppressed.')
+  process.exitCode = 1
+})

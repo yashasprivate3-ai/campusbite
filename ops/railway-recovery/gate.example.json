@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "gateId": "REPLACE_WITH_UNIQUE_OPAQUE_ID",
+  "workflowCommit": "",
+  "target": {
+    "commit": "f5bdd829cd49aec9369e69834b285c9c82ccedcd",
+    "workspace": "c1bfc1f7-628e-44ee-9429-4a5d1d6910f9",
+    "project": "8746c632-7e25-4ad9-87ba-aefb90206e17",
+    "environment": "36922ba5-de10-4a30-a011-f7bee14873c1",
+    "service": "bb34b248-9ccc-4682-b1a8-91679cd986f6",
+    "volume": "c155a062-2f20-4d70-b4d1-8b10d92f7f24"
+  },
+  "verifiedAt": "",
+  "expiresAt": "",
+  "eligibility": { "evidenceId": "", "workspaceSpecificConfirmation": false },
+  "credentials": {
+    "evidenceId": "", "retainedCredentialsRotated": false,
+    "dormantCredentialsRevoked": false, "noSecretsInGitOrLogs": false,
+    "projectTokenEnvironmentScoped": false, "cliCapabilitiesVerified": false, "verifiedAt": ""
+  },
+  "backup": {
+    "evidenceId": "", "createdAt": "", "ciphertextSha256": "",
+    "authenticatedDecryptionVerified": false, "encryptedOffVolumeCopy": false,
+    "sourceSchema": 7, "integrity": "", "foreignKeyViolations": null,
+    "rehearsalSchema": 12, "originalRowsPreserved": false, "restoreTestPassed": false
+  },
+  "recovery": {
+    "evidenceId": "", "writeFreezeHeldUntilVerification": false,
+    "autoDeployDisabled": false, "stagedChangesReviewed": false,
+    "restoreOperatorAvailable": false, "stopAndRestoreProcedureVerified": false,
+    "volumeSnapshotAvailable": false, "rollbackCodeCommit": ""
+  },
+  "paymentsDisabled": true
+}

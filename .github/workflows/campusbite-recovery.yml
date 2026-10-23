@@ -1,0 +1,95 @@
+name: CampusBite guarded recovery
+run-name: CampusBite recovery ${{ inputs.gate_id || 'read-only-check' }}
+
+on:
+  pull_request:
+    paths: ['.github/workflows/campusbite-recovery.yml', 'ops/railway-recovery/**']
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy only after verified gates and environment approval'
+        type: boolean
+        default: false
+      gate_id:
+        description: 'Opaque gate ID from the privately reviewed evidence'
+        type: string
+        default: ''
+  schedule:
+    - cron: '17,47 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: campusbite-zestful-healing-production-recovery
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.10.0'
+      - run: node --test ops/railway-recovery/gates.test.mjs
+      - name: Railway public status (never establishes workspace eligibility)
+        if: github.event_name != 'pull_request'
+        run: node ops/railway-recovery/status.mjs
+
+  candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: f5bdd829cd49aec9369e69834b285c9c82ccedcd
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.10.0'
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+
+  deploy:
+    needs: [validate, candidate]
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main' && vars.CAMPUSBITE_RECOVERY_ARMED == 'f5bdd829cd49aec9369e69834b285c9c82ccedcd'
+    environment: campusbite-recovery-f5bdd82
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.10.0'
+      - name: Validate reviewed gate evidence before installing deployment tools
+        env:
+          RELEASE_GATE_JSON: ${{ secrets.RELEASE_GATE_JSON }}
+          REQUESTED_GATE_ID: ${{ inputs.gate_id }}
+        run: node ops/railway-recovery/gates.mjs
+      - name: Obtain immutable deployment source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: f5bdd829cd49aec9369e69834b285c9c82ccedcd
+          path: release
+          persist-credentials: false
+      - name: Install pinned Railway CLI
+        run: npm install --global @railway/cli@5.71.0
+      - name: Recheck gates, inspect live target, deploy and verify
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RELEASE_GATE_JSON: ${{ secrets.RELEASE_GATE_JSON }}
+          REQUESTED_GATE_ID: ${{ inputs.gate_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: node ops/railway-recovery/deploy.mjs

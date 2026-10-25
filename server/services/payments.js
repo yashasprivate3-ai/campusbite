@@ -6,9 +6,14 @@ import { ApiError, invalidRequest } from './apiError.js'
 import { recordAuthEvent } from './auth.js'
 import { createPaidOrderInCurrentTransaction, getOrder } from './orders.js'
 import { PaymentProviderError } from './razorpayProvider.js'
+import { campusDate } from '../../shared/pickupPolicy.js'
 
 const ACTIVE_STATUSES = new Set(['created', 'initiated', 'pending'])
 const TERMINAL_STATUSES = new Set(['paid', 'failed', 'cancelled', 'expired'])
+// Reconciliation waits this long after the local checkout expiry before asking
+// the provider, so Cashfree has time to mark its own order as expired.
+export const RELEASE_GRACE_MS = 2 * 60_000
+const CAPTURED_UNFULFILLED = 'captured_unfulfilled'
 
 function requireObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -90,7 +95,7 @@ function selectAttempt(database, publicId) {
   return database.prepare('SELECT * FROM payment_attempts WHERE public_id = ?').get(publicId)
 }
 
-export function listPaymentReconciliationHolds(database, now = new Date()) {
+export function listPaymentReconciliationHolds(database, now = new Date(), { automaticRelease = false } = {}) {
   const rows = database.prepare(`
     SELECT p.id, p.public_id, p.provider, p.provider_order_id,
       p.provider_payment_id, p.status, p.amount_paise, p.currency,
@@ -136,9 +141,30 @@ export function listPaymentReconciliationHolds(database, now = new Date()) {
     })
   }
 
+  // Payments captured after their stock was released and could not be re-reserved.
+  // No order exists for these; the owner must refund them.
+  const capturedUnfulfilled = database.prepare(`
+    SELECT public_id, provider, provider_order_id, provider_payment_id, status,
+      amount_paise, currency, updated_at
+    FROM payment_attempts
+    WHERE response_code = ? AND order_id IS NULL
+    ORDER BY updated_at ASC, id ASC
+  `).all(CAPTURED_UNFULFILLED).map(row => ({
+    attemptId: row.public_id,
+    provider: row.provider,
+    providerOrderId: row.provider_order_id,
+    providerPaymentId: row.provider_payment_id || null,
+    localStatus: row.status,
+    amountPaise: row.amount_paise,
+    currency: row.currency,
+    updatedAt: normalizeTimestamp(row.updated_at),
+    reason: 'captured_after_release_refund_required',
+  }))
+
   return {
-    automaticReleaseEnabled: false,
+    automaticReleaseEnabled: automaticRelease === true,
     holds: [...byAttempt.values()],
+    capturedUnfulfilled,
   }
 }
 
@@ -158,6 +184,56 @@ function recordEvent(database, eventType, userId, metadata = {}, success = true)
 
 function isExpired(row) {
   return new Date(normalizeTimestamp(row.expires_at)).getTime() <= Date.now()
+}
+
+function releaseHeldReservations(database, attemptId, now) {
+  return database.prepare(`UPDATE stock_reservations SET status = 'released', released_at = ?
+    WHERE attempt_id = ? AND status = 'held'`).run(now, attemptId).changes
+}
+
+// Marks an attempt as ended and releases its held stock in one transaction.
+// Only called after the provider has confirmed that its order can no longer be paid.
+function settleEndedWithoutPayment(database, row, status, providerCode, providerMessage) {
+  database.exec('BEGIN IMMEDIATE;')
+  try {
+    const current = database.prepare('SELECT * FROM payment_attempts WHERE id = ?').get(row.id)
+    if (current.order_id || current.status === 'paid') {
+      database.exec('COMMIT;')
+      return
+    }
+    const now = new Date().toISOString()
+    database.prepare(`UPDATE payment_attempts SET status = ?, response_code = ?, response_message = ?, updated_at = ?
+      WHERE id = ? AND order_id IS NULL`).run(status, providerCode || status, providerMessage || 'Payment ended.', now, current.id)
+    const released = releaseHeldReservations(database, current.id, now)
+    if (released > 0) {
+      recordEvent(database, 'STOCK_RESERVATION_RELEASED', current.student_user_id, { attemptId: current.public_id, reason: status })
+    }
+    database.exec('COMMIT;')
+  } catch (error) {
+    database.exec('ROLLBACK;')
+    throw error
+  }
+}
+
+// Re-holds released stock for a late successful payment, only for today's service
+// date and only if every item still has enough unreserved stock. Returns false
+// (and changes nothing) if that is not possible.
+function reacquireReleasedReservations(database, attemptId) {
+  const rows = database.prepare(`SELECT service_date, menu_item_id, quantity FROM stock_reservations
+    WHERE attempt_id = ? AND status = 'released'`).all(attemptId)
+  const today = campusDate(new Date())
+  for (const reservation of rows) {
+    if (reservation.service_date !== today) return false
+    const stock = database.prepare(`SELECT s.quantity - COALESCE((SELECT SUM(r.quantity) FROM stock_reservations r
+      WHERE r.service_date = s.service_date AND r.menu_item_id = s.menu_item_id
+        AND r.status IN ('held', 'consumed')), 0) AS remaining
+      FROM daily_menu_stock s WHERE s.service_date = ? AND s.menu_item_id = ?`)
+      .get(reservation.service_date, reservation.menu_item_id)
+    if (!stock || stock.remaining < reservation.quantity) return false
+  }
+  database.prepare(`UPDATE stock_reservations SET status = 'held', released_at = NULL
+    WHERE attempt_id = ? AND status = 'released'`).run(attemptId)
+  return true
 }
 
 function unavailable() {
@@ -313,6 +389,12 @@ function fulfillCapturedPayment(database, row, studentUserId, payment, signature
   if (payment.amountPaise !== row.amount_paise) return rejectMismatch(database, row, studentUserId, 'amount')
   if (payment.currency !== row.currency || payment.currency !== 'INR') return rejectMismatch(database, row, studentUserId, 'currency')
   if (!payment.captured || payment.status !== 'paid') {
+    // Cashfree reports 'expired'/'cancelled' only when its order has ended (EXPIRED/TERMINATED)
+    // with no successful payment, so held stock can be released safely and idempotently.
+    if (row.provider === 'cashfree' && ['expired', 'cancelled'].includes(payment.status)) {
+      settleEndedWithoutPayment(database, row, payment.status, payment.providerCode, payment.providerMessage)
+      return mapAttempt(selectAttempt(database, row.public_id), database)
+    }
     updateNonPaid(database, row, payment, payment.status)
     recordEvent(database, payment.status === 'failed' ? 'PAYMENT_FAILED' : 'PAYMENT_PENDING', studentUserId, { attemptId: row.public_id }, payment.status !== 'failed')
     return mapAttempt(selectAttempt(database, row.public_id), database)
@@ -329,6 +411,28 @@ function fulfillCapturedPayment(database, row, studentUserId, payment, signature
     const items = parseJson(current.trusted_cart_json, null)
     const checkoutDetails = parseJson(current.checkout_details_json, null)
     if (!Array.isArray(items) || !checkoutDetails) throw new Error('Stored trusted payment snapshot is invalid.')
+    const reservationStates = database.prepare('SELECT status FROM stock_reservations WHERE attempt_id = ?').all(current.id)
+    const releasedEarlier = TERMINAL_STATUSES.has(current.status) && current.status !== 'paid' &&
+      reservationStates.length > 0 && reservationStates.every(reservation => reservation.status === 'released')
+    if (releasedEarlier) {
+      if (current.response_code === CAPTURED_UNFULFILLED && current.provider_payment_id === payment.paymentId) {
+        database.exec('COMMIT;')
+        return mapAttempt(current, database)
+      }
+      if (!reacquireReleasedReservations(database, current.id)) {
+        // Never oversell and never drop a captured payment: record it for an owner refund.
+        const now = new Date().toISOString()
+        database.prepare(`UPDATE payment_attempts SET provider_payment_id = ?, captured_at = ?, verified_at = ?,
+          response_code = ?, response_message = ?, updated_at = ? WHERE id = ? AND order_id IS NULL`)
+          .run(payment.paymentId, now, now, CAPTURED_UNFULFILLED,
+            'Payment received after this checkout ended and the items are no longer available. A refund is required.',
+            now, current.id)
+        recordEvent(database, 'PAYMENT_CAPTURED_AFTER_RELEASE', studentUserId, { attemptId: current.public_id }, false)
+        database.exec('COMMIT;')
+        return mapAttempt(selectAttempt(database, current.public_id), database)
+      }
+      recordEvent(database, 'STOCK_RESERVATION_REACQUIRED', studentUserId, { attemptId: current.public_id })
+    }
     consumeMatchingReservations(database, current.id, items)
     const orderResult = createPaidOrderInCurrentTransaction(database, {
       attemptPublicId: current.public_id,
@@ -420,4 +524,51 @@ export async function getPaymentStatus(database, attemptId, studentUserId, payme
     return mapAttempt(row, database)
   }
   return fulfillCapturedPayment(database, row, studentUserId, payment)
+}
+
+// Automatic, idempotent release of stock held by Cashfree checkouts that ended
+// without payment. Each run asks Cashfree for the real order state; anything
+// uncertain (still payable, pending, or a provider error) keeps its stock held
+// and is retried on the next run. A late success creates the order normally.
+export async function reconcilePaymentHolds(database, paymentConfig, provider, now = new Date(), { limit = 50 } = {}) {
+  const summary = { checked: 0, released: 0, fulfilled: 0, kept: 0, deferred: 0 }
+  if (!paymentConfig?.enabled || provider?.name !== 'cashfree') return summary
+  const cutoff = new Date(now.getTime() - RELEASE_GRACE_MS).toISOString()
+  const rows = database.prepare(`
+    SELECT DISTINCT p.*
+    FROM payment_attempts p
+    JOIN stock_reservations r ON r.attempt_id = p.id
+    WHERE p.provider = 'cashfree'
+      AND p.order_id IS NULL
+      AND r.status = 'held'
+      AND julianday(p.expires_at) <= julianday(?)
+    ORDER BY p.id ASC
+    LIMIT ?
+  `).all(cutoff, limit)
+
+  for (const row of rows) {
+    summary.checked += 1
+    try {
+      const payment = await provider.fetchProviderStatus(row.provider_order_id)
+      if (!payment) {
+        summary.kept += 1
+        continue
+      }
+      const result = fulfillCapturedPayment(database, row, row.student_user_id, payment)
+      if (result.status === 'paid') summary.fulfilled += 1
+      else if (result.status === 'expired' || result.status === 'cancelled') summary.released += 1
+      else summary.kept += 1
+    } catch (error) {
+      // Cashfree has no order with this ID and the checkout never received a session,
+      // so nothing can ever be paid against it.
+      if (error?.code === 'payment_order_not_found' && !row.provider_session_id) {
+        settleEndedWithoutPayment(database, row, 'failed', 'ORDER_NOT_FOUND',
+          'The payment session was never opened. No payment was taken.')
+        summary.released += 1
+      } else {
+        summary.deferred += 1
+      }
+    }
+  }
+  return summary
 }

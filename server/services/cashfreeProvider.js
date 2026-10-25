@@ -32,6 +32,7 @@ export function createCashfreeProvider(config, fetchImplementation = fetch) {
     } catch {
       throw new PaymentProviderError('payment_gateway_timeout', 'Payment service unavailable. Check payment status before retrying.')
     }
+    if (response.status === 404) throw new PaymentProviderError('payment_order_not_found', 'The payment order was not found.')
     if (!response.ok) throw new PaymentProviderError('payment_gateway_rejected', 'Payment service rejected the request.')
     const text = await response.text()
     if (text.length > 65536) throw invalid()

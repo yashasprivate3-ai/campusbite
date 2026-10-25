@@ -50,7 +50,9 @@ export async function handlePaymentRoutes(
       ROLES.OWNER,
       request,
     )
-    sendJson(response, 200, listPaymentReconciliationHolds(database))
+    sendJson(response, 200, listPaymentReconciliationHolds(database, new Date(), {
+      automaticRelease: paymentConfig.enabled && paymentProvider?.name === 'cashfree',
+    }))
     return true
   }
 

@@ -233,11 +233,10 @@ test('Cashfree expired or terminated sessions become terminal only from provider
     state.orderStatus = orderStatus
     assert.equal((await getPaymentStatus(db, a.attemptId, studentId, config, provider)).status, expected)
     assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
-    const reconciliation = listPaymentReconciliationHolds(db)
-    assert.equal(reconciliation.automaticReleaseEnabled, false)
-    assert.equal(reconciliation.holds.length, 1)
-    assert.equal(reconciliation.holds[0].attemptId, a.attemptId)
-    assert.equal(reconciliation.holds[0].provider, 'cashfree')
-    assert.equal(db.prepare('SELECT status FROM stock_reservations').get().status, 'held')
+    // Provider-confirmed EXPIRED/TERMINATED orders release their held stock.
+    const reconciliation = listPaymentReconciliationHolds(db, new Date(), { automaticRelease: true })
+    assert.equal(reconciliation.automaticReleaseEnabled, true)
+    assert.equal(reconciliation.holds.length, 0)
+    assert.equal(db.prepare('SELECT status FROM stock_reservations').get().status, 'released')
   }
 })

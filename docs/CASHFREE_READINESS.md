@@ -45,3 +45,12 @@ Schema 8 widens the payment provider CHECK and adds a private session column. Ex
 - Cashfree webhook verification: https://www.cashfree.com/devstudio/preview/pg/tools/webhookVerification
 - MSG91 custom UI widget: https://msg91.com/help/sendotp/how-to-integrate-the-new-login-with-otp-widget
 - MSG91 token verification reference (schema not rendered during this check): https://docs.msg91.com/otp-widget/verify-access-token
+
+## Stock reservation lifecycle (V1 release blocker fix)
+
+- Stock is held when checkout starts and stays held while the Cashfree order can still be paid. Closing the payment pop-up only triggers a status check; it never releases stock.
+- A FAILED or USER_DROPPED individual payment does not end a Cashfree order (the student can retry inside it), so the attempt stays `pending` with the provider code shown and the stock stays held.
+- Held stock is released automatically and idempotently only when Cashfree confirms the order ended without a successful payment (`EXPIRED` -> `expired`, `TERMINATED` -> `cancelled`), or when the checkout never received a session and Cashfree has no such order after expiry (`failed`).
+- The server re-checks held Cashfree attempts every 5 minutes, starting 2 minutes after their local expiry. Provider errors or still-payable orders keep the hold and are retried later. A late success found this way creates the order normally.
+- A successful payment that arrives after release re-reserves today's stock if enough remains and creates the order. Otherwise no order is created, nothing is oversold, and the payment is listed under `capturedUnfulfilled` in owner reconciliation for a refund.
+- Razorpay (TEST-only legacy path) keeps the previous behaviour: holds are reported for owner reconciliation and not released automatically.

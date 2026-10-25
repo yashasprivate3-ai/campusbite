@@ -19,6 +19,7 @@ import { LoginThrottle } from './services/loginThrottle.js'
 import { createPhoneVerificationProvider } from './services/phoneVerificationProvider.js'
 import { createCashfreeProvider } from './services/cashfreeProvider.js'
 import { createRazorpayProvider } from './services/razorpayProvider.js'
+import { reconcilePaymentHolds } from './services/payments.js'
 
 const paymentProvider = createCashfreeProvider(serverConfig.payments) || createRazorpayProvider(serverConfig.payments)
 
@@ -156,6 +157,30 @@ server.listen(serverConfig.port, serverConfig.host, () => {
   )
   console.log(`[campusbite-api] Database: ${serverConfig.databasePath}`)
 })
+
+// Release stock held by Cashfree checkouts that ended without payment.
+const PAYMENT_RECONCILIATION_INTERVAL_MS = 5 * 60_000
+let paymentReconciliationRunning = false
+
+async function runPaymentReconciliation() {
+  if (paymentReconciliationRunning) return
+  paymentReconciliationRunning = true
+  try {
+    const summary = await reconcilePaymentHolds(database, serverConfig.payments, paymentProvider)
+    if (summary.released || summary.fulfilled || summary.deferred) {
+      console.log(`[campusbite-api] Payment reconciliation: ${summary.released} released, ${summary.fulfilled} fulfilled, ${summary.kept} still pending, ${summary.deferred} deferred.`)
+    }
+  } catch {
+    console.error('[campusbite-api] Payment reconciliation failed; held stock was kept.')
+  } finally {
+    paymentReconciliationRunning = false
+  }
+}
+
+if (serverConfig.payments.enabled && paymentProvider?.name === 'cashfree') {
+  setInterval(runPaymentReconciliation, PAYMENT_RECONCILIATION_INTERVAL_MS).unref()
+  setTimeout(runPaymentReconciliation, 60_000).unref()
+}
 
 function shutdown(signal) {
   console.log(`[campusbite-api] ${signal} received. Shutting down.`)

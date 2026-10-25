@@ -107,11 +107,14 @@ test('Vercel keeps API prefix and prohibits shared caching; demo has no backend 
   const result = evaluate(vercelUrl, 'config', { CAMPUSBITE_BACKEND_URL: 'https://backend.example.com/' })
   assert.equal(result.status, 0, result.stderr)
   const value = JSON.parse(result.stdout)
-  assert.deepEqual(value.rewrites, [{ source: '/api/:path*', destination: 'https://backend.example.com/api/:path*' }])
+  assert.deepEqual(value.rewrites.filter(route => route.source.startsWith('/api')), [{ source: '/api/:path*', destination: 'https://backend.example.com/api/:path*' }])
+  for (const page of ['contact', 'privacy', 'terms', 'refunds', 'about']) {
+    assert.ok(value.rewrites.some(route => route.source === '/' + page && route.destination === '/' + page + '/index.html'))
+  }
   assert.ok(value.headers[0].headers.every(({ value }) => value === 'no-store'))
   const demo = evaluate(vercelUrl, 'config', { VITE_DEMO_MODE: 'true' })
   assert.equal(demo.status, 0, demo.stderr)
-  assert.deepEqual(JSON.parse(demo.stdout).rewrites, [])
+  assert.equal(JSON.parse(demo.stdout).rewrites.some(route => route.source.startsWith('/api')), false)
 })
 
 test('Vercel connected configuration fails closed for missing or unsafe backend origins', () => {

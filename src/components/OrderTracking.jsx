@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 const ORDER_STEPS = [
   {
     status: 'new',
@@ -220,7 +221,7 @@ export function OrderTracking({ onBackToMenu, order }) {
           <div>
             <strong>Your order is ready for pickup.</strong>
             <p>
-              Show token <b>{order.token}</b> at the CampusBite pickup counter.
+              Show token <b>{order.token}</b> at the {BRAND.name} pickup counter.
             </p>
           </div>
         </section>

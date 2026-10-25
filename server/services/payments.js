@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 import { reserveCartStock } from './menuAvailability.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { buildTrustedCartSnapshot } from '../data/menu.js'
@@ -160,7 +161,7 @@ function isExpired(row) {
 }
 
 function unavailable() {
-  return new ApiError(503, 'payments_unavailable', 'Payments are not configured on this CampusBite server.')
+  return new ApiError(503, 'payments_unavailable', `Payments are not configured on this ${BRAND.name} server.`)
 }
 
 function safeProviderResult(error) {

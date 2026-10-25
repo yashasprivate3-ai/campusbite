@@ -31,12 +31,14 @@ const developmentProvider = {
   },
 }
 
+// Fixtures use the inserted user ids so tests also run against pre-populated databases.
+let studentId
 function createDatabase() {
   const database = initializeDatabase(':memory:')
   databases.push(database)
-  database.prepare(`INSERT INTO users
+  studentId = Number(database.prepare(`INSERT INTO users
     (public_id, role, display_name, phone_number, phone_verified, status)
-    VALUES ('otp-student', 'STUDENT', 'OTP Student', '+919000000010', 0, 'ACTIVE')`).run()
+    VALUES ('otp-student', 'STUDENT', 'OTP Student', '+919000000010', 0, 'ACTIVE')`).run().lastInsertRowid)
   return database
 }
 
@@ -130,29 +132,29 @@ test('Meta provider retries one transient response and maps timeout safely', asy
 
 test('OTP cooldown, expiry, and single-use behavior remain enforced', async () => {
   const database = createDatabase()
-  await requestPhoneVerification(database, 1, request, otpConfig, developmentProvider)
+  await requestPhoneVerification(database, studentId, request, otpConfig, developmentProvider)
   await assert.rejects(
-    requestPhoneVerification(database, 1, request, otpConfig, developmentProvider),
+    requestPhoneVerification(database, studentId, request, otpConfig, developmentProvider),
     (error) => error.code === 'otp_cooldown_active',
   )
-  database.prepare(`UPDATE phone_verification_challenges SET expires_at = '2000-01-01T00:00:00.000Z'`).run()
+  database.prepare(`UPDATE phone_verification_challenges SET expires_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?`).run(studentId)
   assert.throws(
-    () => verifyPhoneCode(database, 1, { code: '123456' }, otpConfig),
+    () => verifyPhoneCode(database, studentId, { code: '123456' }, otpConfig),
     (error) => error.code === 'otp_expired',
   )
 })
 
 test('resend invalidates the old challenge and correct OTP is consumed once', async () => {
   const database = createDatabase()
-  await requestPhoneVerification(database, 1, request, otpConfig, developmentProvider)
-  database.prepare(`UPDATE phone_verification_challenges SET resend_available_at = '2000-01-01T00:00:00.000Z'`).run()
-  await requestPhoneVerification(database, 1, request, otpConfig, developmentProvider)
-  const challenges = database.prepare('SELECT invalidated_at FROM phone_verification_challenges ORDER BY id').all()
+  await requestPhoneVerification(database, studentId, request, otpConfig, developmentProvider)
+  database.prepare(`UPDATE phone_verification_challenges SET resend_available_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?`).run(studentId)
+  await requestPhoneVerification(database, studentId, request, otpConfig, developmentProvider)
+  const challenges = database.prepare('SELECT invalidated_at FROM phone_verification_challenges WHERE user_id = ? ORDER BY id').all(studentId)
   assert.ok(challenges[0].invalidated_at)
   assert.equal(challenges[1].invalidated_at, null)
-  assert.equal(verifyPhoneCode(database, 1, { code: '123456' }, otpConfig).verified, true)
+  assert.equal(verifyPhoneCode(database, studentId, { code: '123456' }, otpConfig).verified, true)
   assert.throws(
-    () => verifyPhoneCode(database, 1, { code: '123456' }, otpConfig),
+    () => verifyPhoneCode(database, studentId, { code: '123456' }, otpConfig),
     (error) => error.code === 'otp_already_consumed',
   )
 })
@@ -160,10 +162,10 @@ test('resend invalidates the old challenge and correct OTP is consumed once', as
 test('request rate limits and verified phone uniqueness remain enforced', async () => {
   const database = createDatabase()
   const strictConfig = { ...otpConfig, userPhoneRequestsPerHour: 1 }
-  await requestPhoneVerification(database, 1, request, strictConfig, developmentProvider)
-  database.prepare(`UPDATE phone_verification_challenges SET resend_available_at = '2000-01-01T00:00:00.000Z'`).run()
+  await requestPhoneVerification(database, studentId, request, strictConfig, developmentProvider)
+  database.prepare(`UPDATE phone_verification_challenges SET resend_available_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?`).run(studentId)
   await assert.rejects(
-    requestPhoneVerification(database, 1, request, strictConfig, developmentProvider),
+    requestPhoneVerification(database, studentId, request, strictConfig, developmentProvider),
     (error) => error.code === 'otp_rate_limit_reached',
   )
 
@@ -171,7 +173,7 @@ test('request rate limits and verified phone uniqueness remain enforced', async 
     (public_id, role, display_name, phone_number, phone_verified, status)
     VALUES ('verified-student', 'STUDENT', 'Verified Student', '+919000000010', 1, 'ACTIVE')`).run()
   assert.throws(
-    () => verifyPhoneCode(database, 1, { code: '123456' }, otpConfig),
+    () => verifyPhoneCode(database, studentId, { code: '123456' }, otpConfig),
     (error) => error.code === 'phone_unavailable',
   )
 })

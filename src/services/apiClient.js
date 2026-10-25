@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 export const AUTH_UNAUTHORIZED_EVENT = 'campusbite:auth-unauthorized'
 
 export class ApiClientError extends Error {
@@ -30,7 +31,7 @@ export async function apiRequest(
     if (error.name === 'AbortError') throw error
 
     throw new ApiClientError(
-      'CampusBite could not reach the service. Check that the backend is running and try again.',
+      `${BRAND.name} could not reach the service. Check that the backend is running and try again.`,
       { code: 'network_error' },
     )
   }

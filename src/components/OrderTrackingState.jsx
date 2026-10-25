@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 export function OrderTrackingState({ error, isLoading, onBackToMenu, onRetry }) {
   return (
     <main className="tracking-main">
@@ -6,7 +7,7 @@ export function OrderTrackingState({ error, isLoading, onBackToMenu, onRetry }) 
         <h1>{isLoading ? 'Loading your order…' : 'Order unavailable'}</h1>
         <p>
           {isLoading
-            ? 'Checking the shared CampusBite order record.'
+            ? `Checking the shared ${BRAND.name} order record.`
             : error || 'The requested order could not be found.'}
         </p>
         {!isLoading && (

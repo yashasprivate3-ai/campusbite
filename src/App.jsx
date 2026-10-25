@@ -1,4 +1,5 @@
 import { pickupWindows } from '../shared/pickupPolicy.js'
+import { BRAND } from '../shared/brand.js'
 import { sanitizeCart } from './utils/cartState.js'
 import { useMenuAvailability } from './hooks/useMenuAvailability.js'
 import { itemStatus } from '../shared/batchPolicy.js'
@@ -183,7 +184,7 @@ function KitchenDashboard({
       {isLoading && orders.length === 0 && (
         <div className="api-state" role="status">
           <strong>Loading kitchen orders…</strong>
-          <span>Connecting to the shared CampusBite order queue.</span>
+          <span>Connecting to the shared {BRAND.name} order queue.</span>
         </div>
       )}
 
@@ -661,7 +662,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
       : getPaymentStatus(attemptId)
     paymentConfirmationRequest.current = request
     setPaymentStatus('checking')
-    setPaymentMessage('CampusBite is verifying the payment with the payment provider…')
+    setPaymentMessage(`${BRAND.name} is verifying the payment with the payment provider…`)
 
     try {
       const attempt = await request
@@ -736,7 +737,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
         return
       }
 
-      setPaymentMessage(`CampusBite verified the total as ₹${attempt.amount}.`)
+      setPaymentMessage(`${BRAND.name} verified the total as ₹${attempt.amount}.`)
       setPaymentStatus('checkout-open')
       await openPaymentCheckout(attempt.checkout, {
         onSuccess: (checkoutResult) => {
@@ -868,9 +869,9 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="CampusBite home">
-          <span className="brand-mark">CB</span>
-          <span><strong>CampusBite</strong><small>Working name</small></span>
+        <a className="brand" href="#top" aria-label={`${BRAND.name} home`}>
+          <span className="brand-mark">{BRAND.initials}</span>
+          <span><strong>{BRAND.name}</strong><small>by {BRAND.operator}</small></span>
         </a>
         <div className="header-actions">
           {user.role === 'OWNER' ? (
@@ -1098,7 +1099,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                 <div className="cart-summary">
                   <div><span>Item total</span><strong>₹{cartTotal}</strong></div>
                   <button className="clear-cart-button" type="button" onClick={clearCart}>Clear cart</button>
-                  <p>Your final total is verified by CampusBite before secure checkout opens.</p>
+                  <p>Your final total is verified by {BRAND.name} before secure checkout opens.</p>
                   <button className="checkout-button" type="button" onClick={openCheckout}>
                     Continue to checkout · ₹{cartTotal}
                   </button>
@@ -1155,12 +1156,12 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                   {cartItems.map((item) => (
                     <div className="review-row" key={item.id}><span>{item.emoji}</span><div><strong>{item.name}</strong><small>Quantity {cart[item.id]}</small></div><strong>₹{item.price * cart[item.id]}</strong></div>
                   ))}
-                  <div className="review-total"><span>{trustedPaymentTotal ? 'CampusBite verified total' : 'Estimated total'}</span><strong>₹{trustedPaymentTotal || cartTotal}</strong></div>
+                  <div className="review-total"><span>{trustedPaymentTotal ? `${BRAND.name} verified total` : 'Estimated total'}</span><strong>₹{trustedPaymentTotal || cartTotal}</strong></div>
                 </div>
                 <div className="pickup-summary"><span>Pickup</span><strong>{pickupMethod === 'scheduled' ? pickupSlot : 'As soon as ready'}</strong>{instructions.trim() && <small>Note: {instructions.trim()}</small>}</div>
                 <div className="payment-safety-notice">
                   <strong>Secure payment · UPI where available</strong>
-                  <span>No order reaches the Kitchen until CampusBite verifies a captured payment directly with the payment provider.</span>
+                  <span>No order reaches the Kitchen until {BRAND.name} verifies a captured payment directly with the payment provider.</span>
                 </div>
                 {!user.phoneVerified && (
                   <div className="phone-verification-review-notice" role="status">
@@ -1227,7 +1228,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   </h3>
 
   <small className="footer-version">
-    CampusBite • Version 1.0
+    {BRAND.name} • Version 1.0
   </small>
 </footer>
       </>}

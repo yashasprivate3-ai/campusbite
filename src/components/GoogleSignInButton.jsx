@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { loadGoogleIdentityServices } from '../services/googleIdentityScript.js'
@@ -106,7 +107,7 @@ export function GoogleSignInButton({ isAuthenticating, onCredential }) {
       {scriptState === 'unavailable' && (
         <span className="auth-feedback auth-feedback-error" role="alert">
           Google sign-in is temporarily unavailable. Try again or contact the
-          CampusBite operator.
+          {BRAND.name} operator.
         </span>
       )}
       {isAuthenticating && (

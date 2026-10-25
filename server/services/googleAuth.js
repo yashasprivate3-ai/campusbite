@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 import { randomUUID } from 'node:crypto'
 import { OAuth2Client } from 'google-auth-library'
 import { ApiError, invalidRequest } from './apiError.js'
@@ -29,7 +30,7 @@ function googleIdentityConflict(database, userId = null) {
   throw new ApiError(
     409,
     'google_identity_conflict',
-    'This Google account cannot be linked automatically. Contact the CampusBite owner.',
+    `This Google account cannot be linked automatically. Contact the ${BRAND.name} owner.`,
   )
 }
 
@@ -174,7 +175,7 @@ export function resolveGoogleStudent(database, verifiedIdentity) {
       throw new ApiError(
         403,
         'account_disabled',
-        'This account is disabled. Contact the CampusBite owner.',
+        `This account is disabled. Contact the ${BRAND.name} owner.`,
       )
     }
     if (findUserByEmail(database, verifiedIdentity.email, identity.user_id)) {

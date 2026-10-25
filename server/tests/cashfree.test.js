@@ -11,12 +11,14 @@ import { initiatePayment, verifyPayment, handlePaymentWebhook, getPaymentStatus,
 const config = { orderingClock, enabled: true, provider: 'cashfree', publicAppUrl: 'https://example.com',
   cashfree: { environment: 'sandbox', clientId: 'synthetic-id', clientSecret: 'synthetic-secret' } }
 const cart = { idempotencyKey: 'cashfree-test-1', items: [{ menuItemId: 1, quantity: 2 }], pickupMethod: 'asap' }
+// Fixtures use the inserted user ids so tests also run against pre-populated databases.
+let studentId
 function setup(t, overrides = {}) {
   const db = initializeDatabase(':memory:')
   seedStock(db)
   t.after(() => db.close())
-  db.prepare(`INSERT INTO users (public_id, role, display_name, phone_number, phone_verified, status)
-    VALUES ('cf-student', 'STUDENT', 'Test', '+919000000001', 1, 'ACTIVE')`).run()
+  studentId = Number(db.prepare(`INSERT INTO users (public_id, role, display_name, phone_number, phone_verified, status)
+    VALUES ('cf-student', 'STUDENT', 'Test', '+919000000001', 1, 'ACTIVE')`).run().lastInsertRowid)
   const state = { calls: [], payment: null, orderId: null, ...overrides }
   const provider = createCashfreeProvider(config, async (url, options) => {
     state.calls.push({ url, options })
@@ -47,8 +49,8 @@ function deliver(db, provider, envelope) {
 }
 test('Cashfree creates a trusted session once and never exposes server credentials', async (t) => {
   const { db, provider, state } = setup(t)
-  const a = await initiatePayment(db, { ...cart, total: 1 }, 1, config, provider)
-  const b = await initiatePayment(db, cart, 1, config, provider)
+  const a = await initiatePayment(db, { ...cart, total: 1 }, studentId, config, provider)
+  const b = await initiatePayment(db, cart, studentId, config, provider)
   assert.equal(a.attemptId, b.attemptId)
   assert.equal(state.calls.length, 1)
   assert.equal(a.checkout.mode, 'sandbox')
@@ -73,7 +75,7 @@ test('Cashfree signature authenticates exact bytes and timestamp; malformed sign
 })
 test('Cashfree duplicate, failed, and out-of-order webhooks create exactly one order', async (t) => {
   const { db, provider } = setup(t)
-  const a = await initiatePayment(db, cart, 1, config, provider)
+  const a = await initiatePayment(db, cart, studentId, config, provider)
   deliver(db, provider, event(a.attemptId, { payment_status: 'FAILED' }, 'PAYMENT_FAILED_WEBHOOK'))
   assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
   db.prepare("UPDATE payment_attempts SET status = 'expired'").run()
@@ -81,34 +83,34 @@ test('Cashfree duplicate, failed, and out-of-order webhooks create exactly one o
   deliver(db, provider, event(a.attemptId))
   deliver(db, provider, event(a.attemptId, { payment_status: 'FAILED' }, 'PAYMENT_FAILED_WEBHOOK'))
   assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
-  assert.equal((await verifyPayment(db, { attemptId: a.attemptId }, 1, config, provider)).status, 'paid')
+  assert.equal((await verifyPayment(db, { attemptId: a.attemptId }, studentId, config, provider)).status, 'paid')
 })
 test('Cashfree wrong amount/currency/order and non-success cannot fulfill', async (t) => {
   const { db, provider, state } = setup(t)
-  const a = await initiatePayment(db, cart, 1, config, provider)
+  const a = await initiatePayment(db, cart, studentId, config, provider)
   for (const changes of [{ payment_amount: 1 }, { payment_currency: 'USD' }, { order_id: 'wrong' }, { payment_amount: '140' }, { payment_status: 'PENDING' }]) {
     assert.throws(() => deliver(db, provider, event(a.attemptId, changes)))
   }
   for (const status of ['PENDING', 'FAILED', 'USER_DROPPED']) {
     state.payment = payment(a.attemptId, { payment_status: status })
-    assert.notEqual((await verifyPayment(db, { attemptId: a.attemptId, success: true }, 1, config, provider)).status, 'paid')
+    assert.notEqual((await verifyPayment(db, { attemptId: a.attemptId, success: true }, studentId, config, provider)).status, 'paid')
   }
   assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
 })
 test('Cashfree backend status recovers delayed success; callbacks cannot override trusted totals', async (t) => {
   const { db, provider, state } = setup(t)
-  const a = await initiatePayment(db, cart, 1, config, provider)
+  const a = await initiatePayment(db, cart, studentId, config, provider)
   state.payment = payment(a.attemptId)
-  const result = await verifyPayment(db, { attemptId: a.attemptId }, 1, config, provider)
+  const result = await verifyPayment(db, { attemptId: a.attemptId }, studentId, config, provider)
   assert.equal(result.status, 'paid')
   deliver(db, provider, event(a.attemptId))
-  assert.equal((await getPaymentStatus(db, a.attemptId, 1, config, provider)).order.id, result.order.id)
+  assert.equal((await getPaymentStatus(db, a.attemptId, studentId, config, provider)).order.id, result.order.id)
   assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
 })
 test('Cashfree timeout keeps a known provider order for webhook recovery', async (t) => {
   const { db } = setup(t)
   const provider = createCashfreeProvider(config, async () => { throw new Error('synthetic timeout') })
-  await assert.rejects(initiatePayment(db, cart, 1, config, provider), { code: 'payment_gateway_timeout' })
+  await assert.rejects(initiatePayment(db, cart, studentId, config, provider), { code: 'payment_gateway_timeout' })
   const row = db.prepare('SELECT * FROM payment_attempts').get()
   assert.equal(row.status, 'pending')
   assert.equal(row.provider_order_id, row.public_id)
@@ -117,7 +119,7 @@ test('Cashfree timeout keeps a known provider order for webhook recovery', async
 })
 test('Cashfree fulfillment rolls back atomically when order creation fails', async (t) => {
   const { db, provider } = setup(t)
-  const a = await initiatePayment(db, cart, 1, config, provider)
+  const a = await initiatePayment(db, cart, studentId, config, provider)
   db.exec("CREATE TRIGGER fail_order BEFORE INSERT ON orders BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;")
   assert.throws(() => deliver(db, provider, event(a.attemptId)))
   assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
@@ -129,15 +131,15 @@ test('Cashfree fulfillment rolls back atomically when order creation fails', asy
 
 test('Cashfree rejects a mismatched creation response without opening checkout', async (t) => {
   const { db, provider } = setup(t, { createResponse: { order_amount: 1 } })
-  await assert.rejects(initiatePayment(db, cart, 1, config, provider), { code: 'payment_gateway_mismatch' })
+  await assert.rejects(initiatePayment(db, cart, studentId, config, provider), { code: 'payment_gateway_mismatch' })
   assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
 })
 test('Cashfree polling concurrent with webhook fulfillment preserves exactly one order', async (t) => {
   const { db, provider } = setup(t)
-  const a = await initiatePayment(db, cart, 1, config, provider)
+  const a = await initiatePayment(db, cart, studentId, config, provider)
   let resolveFetch
   const delayed = { ...provider, fetchProviderStatus: () => new Promise((resolve) => { resolveFetch = resolve }) }
-  const checking = getPaymentStatus(db, a.attemptId, 1, config, delayed)
+  const checking = getPaymentStatus(db, a.attemptId, studentId, config, delayed)
   const envelope = event(a.attemptId)
   deliver(db, provider, envelope)
   resolveFetch(provider.parseWebhook(...envelope))
@@ -147,10 +149,10 @@ test('Cashfree polling concurrent with webhook fulfillment preserves exactly one
 test('Cashfree backend verification rejects wrong trusted amount, currency, and order', async (t) => {
   for (const changes of [{ payment_amount: 1 }, { payment_currency: 'USD' }, { order_id: 'different' }]) {
     const { db, provider, state } = setup(t)
-    const a = await initiatePayment(db, cart, 1, config, provider)
+    const a = await initiatePayment(db, cart, studentId, config, provider)
     state.payment = payment(a.attemptId, changes)
-    if (changes.order_id) assert.equal((await verifyPayment(db, { attemptId: a.attemptId }, 1, config, provider)).status, 'failed')
-    else await assert.rejects(verifyPayment(db, { attemptId: a.attemptId }, 1, config, provider), { code: 'payment_gateway_invalid_response' })
+    if (changes.order_id) assert.equal((await verifyPayment(db, { attemptId: a.attemptId }, studentId, config, provider)).status, 'failed')
+    else await assert.rejects(verifyPayment(db, { attemptId: a.attemptId }, studentId, config, provider), { code: 'payment_gateway_invalid_response' })
     assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
   }
 })
@@ -227,9 +229,9 @@ test('schema 10 upgrade consumes reservations for historical paid linked orders'
 test('Cashfree expired or terminated sessions become terminal only from provider confirmation', async (t) => {
   for (const [orderStatus, expected] of [['EXPIRED', 'expired'], ['TERMINATED', 'cancelled']]) {
     const { db, provider, state } = setup(t)
-    const a = await initiatePayment(db, cart, 1, config, provider)
+    const a = await initiatePayment(db, cart, studentId, config, provider)
     state.orderStatus = orderStatus
-    assert.equal((await getPaymentStatus(db, a.attemptId, 1, config, provider)).status, expected)
+    assert.equal((await getPaymentStatus(db, a.attemptId, studentId, config, provider)).status, expected)
     assert.equal(db.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
     const reconciliation = listPaymentReconciliationHolds(db)
     assert.equal(reconciliation.automaticReleaseEnabled, false)

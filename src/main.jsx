@@ -2,6 +2,7 @@ import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
+import { PolicyLinks } from './components/PolicyLinks.jsx'
 import { AuthProvider } from './auth/AuthContext.jsx'
 
 // This entry-point-only lazy component keeps demo CSS out of the live app bundle.
@@ -21,5 +22,6 @@ createRoot(document.getElementById('root')).render(
     ) : (
       <AuthProvider><App /></AuthProvider>
     )}
+    <PolicyLinks />
   </StrictMode>,
 )

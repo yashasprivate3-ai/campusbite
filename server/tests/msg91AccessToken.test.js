@@ -19,12 +19,14 @@ const otpConfig = { hashSecret: 'synthetic-test-secret-at-least-32-characters' }
 const reply = (body, status = 200) => async () =>
   new Response(JSON.stringify(body), { status })
 
+// Fixtures use the inserted user ids so tests also run against pre-populated databases.
+let studentId
 function createDatabase(phoneNumber = '+919000000010') {
   const database = initializeDatabase(':memory:')
   databases.push(database)
-  database.prepare(`INSERT INTO users
+  studentId = Number(database.prepare(`INSERT INTO users
     (public_id, role, display_name, phone_number, phone_verified, status)
-    VALUES ('msg91-student', 'STUDENT', 'MSG91 Student', ?, 0, 'ACTIVE')`).run(phoneNumber)
+    VALUES ('msg91-student', 'STUDENT', 'MSG91 Student', ?, 0, 'ACTIVE')`).run(phoneNumber).lastInsertRowid)
   return database
 }
 
@@ -171,7 +173,7 @@ test('MSG91 activation trusts only provider phone and binds it to the authentica
   const database = createDatabase()
   const result = await verifyMsg91Phone(
     database,
-    1,
+    studentId,
     { accessToken: token, phoneNumber: '+919999999999', verified: true },
     otpConfig,
     provider(),
@@ -187,33 +189,33 @@ test('MSG91 activation trusts only provider phone and binds it to the authentica
 test('MSG91 phone mismatch fails closed and consumes the verified token against replay', async () => {
   const database = createDatabase()
   await assert.rejects(
-    verifyMsg91Phone(database, 1, { accessToken: token }, otpConfig, provider({ phoneNumber: '+919000000099' })),
+    verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, provider({ phoneNumber: '+919000000099' })),
     error => error.code === 'msg91_phone_mismatch',
   )
-  assert.equal(database.prepare('SELECT phone_verified FROM users WHERE id = 1').get().phone_verified, 0)
+  assert.equal(database.prepare('SELECT phone_verified FROM users WHERE id = ?').get(studentId).phone_verified, 0)
   assert.equal(database.prepare('SELECT count(*) AS count FROM msg91_access_token_uses').get().count, 1)
   await assert.rejects(
-    verifyMsg91Phone(database, 1, { accessToken: token }, otpConfig, provider()),
+    verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, provider()),
     error => error.code === 'msg91_access_token_reused',
   )
 })
 
 test('MSG91 rejects token replay and duplicate phone activation', async () => {
   const database = createDatabase()
-  database.prepare(`INSERT INTO users
+  const otherStudentId = Number(database.prepare(`INSERT INTO users
     (public_id, role, display_name, phone_number, phone_verified, status)
-    VALUES ('other-student', 'STUDENT', 'Other', '+919000000010', 0, 'ACTIVE')`).run()
-  await verifyMsg91Phone(database, 1, { accessToken: token }, otpConfig, provider())
+    VALUES ('other-student', 'STUDENT', 'Other', '+919000000010', 0, 'ACTIVE')`).run().lastInsertRowid)
+  await verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, provider())
   await assert.rejects(
-    verifyMsg91Phone(database, 1, { accessToken: token }, otpConfig, provider()),
+    verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, provider()),
     error => error.code === 'msg91_access_token_reused',
   )
 
   await assert.rejects(
-    verifyMsg91Phone(database, 2, { accessToken: 'other-token' }, otpConfig, provider()),
+    verifyMsg91Phone(database, otherStudentId, { accessToken: 'other-token' }, otpConfig, provider()),
     error => error.code === 'phone_unavailable',
   )
-  assert.equal(database.prepare('SELECT phone_verified FROM users WHERE id = 2').get().phone_verified, 0)
+  assert.equal(database.prepare('SELECT phone_verified FROM users WHERE id = ?').get(otherStudentId).phone_verified, 0)
 })
 
 test('concurrent MSG91 verification permits one activation and rejects the duplicate token', async () => {
@@ -230,8 +232,8 @@ test('concurrent MSG91 verification permits one activation and rejects the dupli
     },
   }
 
-  const first = verifyMsg91Phone(database, 1, { accessToken: token }, otpConfig, concurrentProvider)
-  const second = verifyMsg91Phone(database, 1, { accessToken: token }, otpConfig, concurrentProvider)
+  const first = verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, concurrentProvider)
+  const second = verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, concurrentProvider)
   release()
   const results = await Promise.allSettled([first, second])
   assert.equal(calls, 2)
@@ -239,5 +241,5 @@ test('concurrent MSG91 verification permits one activation and rejects the dupli
   const rejected = results.find(result => result.status === 'rejected')
   assert.ok(['msg91_access_token_reused', 'phone_already_verified'].includes(rejected.reason.code))
   assert.equal(database.prepare('SELECT count(*) AS count FROM msg91_access_token_uses').get().count, 1)
-  assert.equal(database.prepare('SELECT phone_verified FROM users WHERE id = 1').get().phone_verified, 1)
+  assert.equal(database.prepare('SELECT phone_verified FROM users WHERE id = ?').get(studentId).phone_verified, 1)
 })

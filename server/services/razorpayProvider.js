@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { ApiError } from './apiError.js'
 
@@ -93,7 +94,7 @@ export function createRazorpayProvider(config, fetchImplementation = fetch) {
       }
       throw new PaymentProviderError(
         'payment_gateway_unavailable',
-        'CampusBite could not reach the payment service.',
+        `${BRAND.name} could not reach the payment service.`,
       )
     }
     const contentLength = Number(response.headers.get('content-length') || 0)

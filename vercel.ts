@@ -1,3 +1,5 @@
+import { publicPageRoutes } from './shared/publicPages.js'
+
 // Evaluated by Vercel before the build; this value is never a VITE_* secret.
 const demoMode = process.env.VITE_DEMO_MODE === 'true'
 const backendUrl = String(process.env.CAMPUSBITE_BACKEND_URL || '').trim()
@@ -22,8 +24,10 @@ export const config = {
   buildCommand: 'npm run build',
   outputDirectory: 'dist',
   // Preserve /api at the backend, including nested routes. No browser redirect.
-  rewrites: demoMode ? [] : [
-    { source: '/api/:path*', destination: `${backendOrigin}/api/:path*` },
+  rewrites: [
+    ...publicPageRoutes,
+    ...publicPageRoutes.map(route => ({ ...route, source: route.source + '/' })),
+    ...(demoMode ? [] : [{ source: '/api/:path*', destination: `${backendOrigin}/api/:path*` }]),
   ],
   headers: demoMode ? [] : [
     {

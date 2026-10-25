@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 import { useCallback, useState } from 'react'
 import { useAuth } from '../auth/useAuth.js'
 import { GoogleSignInButton } from './GoogleSignInButton.jsx'
@@ -13,7 +14,7 @@ const WORKSPACES = [
   },
   {
     role: 'Student',
-    description: 'Continue securely with Google, then add a phone number.',
+    description: 'Continue with Google, then verify your phone through WhatsApp.',
   },
 ]
 
@@ -67,16 +68,16 @@ export function LoginScreen() {
     <main className="login-shell">
       <section className="login-brand-panel" aria-labelledby="login-title">
         <div className="login-brand-lockup">
-          <span className="brand-mark">CB</span>
+          <span className="brand-mark">{BRAND.initials}</span>
           <div>
-            <strong>CampusBite</strong>
+            <strong>{BRAND.name}</strong>
             <small>Secure workspace access</small>
           </div>
         </div>
 
         <div className="login-brand-copy">
-          <p className="eyebrow">Sprint 7 · Authentication foundation</p>
-          <h1 id="login-title">Sign in to your CampusBite workspace.</h1>
+          <p className="eyebrow">Campus food, made simpler</p>
+          <h1 id="login-title">Sign in to your {BRAND.name} workspace.</h1>
           <p>
             Your account role determines which operational tools and orders you
             can access.
@@ -116,7 +117,7 @@ export function LoginScreen() {
           <div className="student-google-access">
             <strong>Student sign-in</strong>
             <span>
-              Your identity is verified by Google on the CampusBite server.
+              Your identity is verified by Google on the {BRAND.name} server.
             </span>
             <GoogleSignInButton
               isAuthenticating={isAuthenticating}
@@ -170,8 +171,8 @@ export function LoginScreen() {
           <div className="future-auth-note">
             <strong>Phone onboarding</strong>
             <p>
-              A phone number is compulsory after Google sign-in. It remains
-              unverified until the separate Sprint 7.2 verification step.
+              After Google sign-in, verify your phone number through WhatsApp
+              to access your student workspace and place orders.
             </p>
           </div>
         </form>

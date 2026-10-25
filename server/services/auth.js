@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 import { createHash, randomBytes } from 'node:crypto'
 import { ApiError, invalidRequest } from './apiError.js'
 import { hashPassword, verifyPassword } from './passwords.js'
@@ -163,7 +164,7 @@ export function authenticateLocalUser(database, payload, authConfig) {
     throw new ApiError(
       403,
       'account_disabled',
-      'This account is disabled. Contact the CampusBite owner.',
+      `This account is disabled. Contact the ${BRAND.name} owner.`,
     )
   }
 

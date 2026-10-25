@@ -1,3 +1,4 @@
+import { BRAND } from '../../shared/brand.js'
 const SCRIPT_URL = 'https://checkout.razorpay.com/v1/checkout.js'
 let checkoutScriptPromise
 let checkoutOpen = false
@@ -27,11 +28,11 @@ function loadCheckoutScript() {
 }
 
 function validateCheckout(checkout) {
-  if (!checkout || typeof checkout !== 'object') throw new Error('CampusBite received incomplete checkout data.')
-  if (!/^rzp_test_[A-Za-z0-9]+$/.test(checkout.keyId || '')) throw new Error('CampusBite rejected an invalid Test Mode Key ID.')
-  if (!/^order_[A-Za-z0-9]{6,80}$/.test(checkout.orderId || '')) throw new Error('CampusBite received an invalid payment order.')
+  if (!checkout || typeof checkout !== 'object') throw new Error(`${BRAND.name} received incomplete checkout data.`)
+  if (!/^rzp_test_[A-Za-z0-9]+$/.test(checkout.keyId || '')) throw new Error(`${BRAND.name} rejected an invalid Test Mode Key ID.`)
+  if (!/^order_[A-Za-z0-9]{6,80}$/.test(checkout.orderId || '')) throw new Error(`${BRAND.name} received an invalid payment order.`)
   if (!Number.isSafeInteger(checkout.amount) || checkout.amount <= 0 || checkout.currency !== 'INR') {
-    throw new Error('CampusBite received an invalid payment amount.')
+    throw new Error(`${BRAND.name} received an invalid payment amount.`)
   }
 }
 
@@ -52,7 +53,7 @@ export async function openRazorpayCheckout(checkout, { onDismiss, onFailure, onS
     amount: checkout.amount,
     currency: checkout.currency,
     order_id: checkout.orderId,
-    name: 'CampusBite',
+    name: BRAND.name,
     description: 'Campus canteen order',
     method: 'upi',
     retry: { enabled: false },

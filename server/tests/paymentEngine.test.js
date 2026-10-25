@@ -25,16 +25,19 @@ const paymentConfig = {
   razorpay: { attemptLifetimeMinutes: 15 },
 }
 
+// Fixtures use the inserted user ids so tests also run against pre-populated databases.
+let studentOneId
+let studentTwoId
 function createDatabase() {
   const database = initializeDatabase(':memory:')
   seedStock(database)
   databases.push(database)
-  database.prepare(`INSERT INTO users
+  studentOneId = Number(database.prepare(`INSERT INTO users
     (public_id, role, display_name, phone_number, phone_verified, status)
-    VALUES (?, 'STUDENT', ?, ?, 1, 'ACTIVE')`).run('student-one', 'Student One', '+919000000001')
-  database.prepare(`INSERT INTO users
+    VALUES (?, 'STUDENT', ?, ?, 1, 'ACTIVE')`).run('student-one', 'Student One', '+919000000001').lastInsertRowid)
+  studentTwoId = Number(database.prepare(`INSERT INTO users
     (public_id, role, display_name, phone_number, phone_verified, status)
-    VALUES (?, 'STUDENT', ?, ?, 1, 'ACTIVE')`).run('student-two', 'Student Two', '+919000000002')
+    VALUES (?, 'STUDENT', ?, ?, 1, 'ACTIVE')`).run('student-two', 'Student Two', '+919000000002').lastInsertRowid)
   return database
 }
 
@@ -73,7 +76,7 @@ test('webhook checks exact raw bytes, dedicated secret, malformed signatures and
 test('duplicate and out-of-order webhooks recover terminal attempts with exactly one order', async () => {
   for (const status of ['initiated', 'failed', 'cancelled', 'expired']) {
     const database = createDatabase()
-    const attempt = await initiatePayment(database, payload(), 1, paymentConfig, provider())
+    const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, provider())
     database.prepare('UPDATE payment_attempts SET status = ?').run(status)
     const deliver = (event) => handlePaymentWebhook(database, ...event, paymentConfig, webhookGateway())
     deliver(signedEvent({}, 'payment.failed'))
@@ -82,20 +85,20 @@ test('duplicate and out-of-order webhooks recover terminal attempts with exactly
     deliver(signedEvent())
     deliver(signedEvent({}, 'order.paid'))
     deliver(signedEvent({}, 'payment.authorized'))
-    const result = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, provider())
+    const result = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, provider())
     assert.equal(result.status, 'paid')
     assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
     const reservations = database.prepare('SELECT status FROM stock_reservations').all()
     assert.ok(reservations.length > 0)
     assert.ok(reservations.every(row => row.status === 'consumed'))
-    const repeated = await verifyPayment(database, { attemptId: attempt.attemptId }, 1, paymentConfig, provider())
+    const repeated = await verifyPayment(database, { attemptId: attempt.attemptId }, studentOneId, paymentConfig, provider())
     assert.equal(repeated.order.id, result.order.id)
   }
 })
 
 test('webhook rejects mismatches and noncaptured payloads without changing the attempt', async () => {
   const database = createDatabase()
-  await initiatePayment(database, payload(), 1, paymentConfig, provider())
+  await initiatePayment(database, payload(), studentOneId, paymentConfig, provider())
   for (const overrides of [{ amount: 1 }, { amount: '14000' }, { currency: 'USD' },
     { captured: false }, { status: 'authorized' }, { id: 'invalid' }]) {
     assert.throws(() => handlePaymentWebhook(database, ...signedEvent(overrides), paymentConfig, webhookGateway()))
@@ -111,8 +114,8 @@ test('webhook rejects mismatches and noncaptured payloads without changing the a
 test('webhook cannot reuse a payment linked to another attempt and rolls back failed fulfillment', async () => {
   const database = createDatabase()
   const gateway = provider()
-  await initiatePayment(database, payload(), 1, paymentConfig, gateway)
-  await initiatePayment(database, payload('request-0002'), 1, paymentConfig, gateway)
+  await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
+  await initiatePayment(database, payload('request-0002'), studentOneId, paymentConfig, gateway)
   database.exec("CREATE TRIGGER fail_order BEFORE INSERT ON orders BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;")
   assert.throws(() => handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway()))
   assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
@@ -128,7 +131,7 @@ test('webhook overlapping checkout and polling fulfillment still creates exactly
   for (const path of ['checkout', 'polling']) {
     const database = createDatabase()
     const base = provider()
-    const attempt = await initiatePayment(database, payload(), 1, paymentConfig, base)
+    const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, base)
     let finishFetch
     const gateway = { ...base,
       fetchPayment: () => new Promise((resolve) => { finishFetch = resolve }),
@@ -136,8 +139,8 @@ test('webhook overlapping checkout and polling fulfillment still creates exactly
     }
     const pending = path === 'checkout'
       ? verifyPayment(database, { attemptId: attempt.attemptId, razorpay_order_id: attempt.checkout.orderId,
-        razorpay_payment_id: 'pay_TestPayment1', razorpay_signature: 'a'.repeat(64) }, 1, paymentConfig, gateway)
-      : getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
+        razorpay_payment_id: 'pay_TestPayment1', razorpay_signature: 'a'.repeat(64) }, studentOneId, paymentConfig, gateway)
+      : getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
     handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
     finishFetch(await base.fetchPayment())
     assert.equal((await pending).status, 'paid')
@@ -148,7 +151,7 @@ test('webhook overlapping checkout and polling fulfillment still creates exactly
 
 test('public webhook route accepts signed bytes without student auth and limits body size', async () => {
   const database = createDatabase()
-  await initiatePayment(database, payload(), 1, paymentConfig, provider())
+  await initiatePayment(database, payload(), studentOneId, paymentConfig, provider())
   const [body, signature] = signedEvent()
   const request = Readable.from([body.subarray(0, 30), body.subarray(30)])
   request.method = 'POST'
@@ -233,12 +236,12 @@ test('trusted cart computes integer-paise totals and rejects tampering', () => {
 test('initiation is idempotent and conflicting reuse is rejected', async () => {
   const database = createDatabase()
   const gateway = provider()
-  const first = await initiatePayment(database, payload(), 1, paymentConfig, gateway)
-  const second = await initiatePayment(database, payload(), 1, paymentConfig, gateway)
+  const first = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
+  const second = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
   assert.equal(first.attemptId, second.attemptId)
   assert.equal(second.reused, true)
   await assert.rejects(
-    initiatePayment(database, { ...payload(), items: [{ menuItemId: 2, quantity: 1 }] }, 1, paymentConfig, gateway),
+    initiatePayment(database, { ...payload(), items: [{ menuItemId: 2, quantity: 1 }] }, studentOneId, paymentConfig, gateway),
     (error) => error.code === 'payment_idempotency_conflict',
   )
 })
@@ -246,15 +249,15 @@ test('initiation is idempotent and conflicting reuse is rejected', async () => {
 test('captured verification creates exactly one order and repeated verification is idempotent', async () => {
   const database = createDatabase()
   const gateway = provider()
-  const attempt = await initiatePayment(database, payload(), 1, paymentConfig, gateway)
+  const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
   const checkout = {
     attemptId: attempt.attemptId,
     razorpay_order_id: attempt.checkout.orderId,
     razorpay_payment_id: 'pay_TestPayment1',
     razorpay_signature: 'a'.repeat(64),
   }
-  const paid = await verifyPayment(database, checkout, 1, paymentConfig, gateway)
-  const repeated = await verifyPayment(database, checkout, 1, paymentConfig, gateway)
+  const paid = await verifyPayment(database, checkout, studentOneId, paymentConfig, gateway)
+  const repeated = await verifyPayment(database, checkout, studentOneId, paymentConfig, gateway)
   assert.equal(paid.status, 'paid')
   assert.equal(paid.order.id, repeated.order.id)
   assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 1)
@@ -275,11 +278,11 @@ test('captured fulfillment rejects missing, released, mismatched, or extra reser
 
   for (const [name, corrupt] of corruptions) {
     const database = createDatabase()
-    const attempt = await initiatePayment(database, payload(`guard-${name}`), 1, paymentConfig, provider())
+    const attempt = await initiatePayment(database, payload(`guard-${name}`), studentOneId, paymentConfig, provider())
     corrupt(database)
     const gateway = provider({ async fetchProviderStatus() { return capturedPayment(attempt) } })
 
-    await assert.rejects(getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway), /reservations/)
+    await assert.rejects(getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway), /reservations/)
     assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 0)
     assert.equal(database.prepare('SELECT status FROM payment_attempts').get().status, 'initiated')
     assert.equal(database.prepare("SELECT count(*) AS count FROM stock_reservations WHERE status = 'consumed'").get().count, 0)
@@ -292,11 +295,11 @@ test('multi-item captured fulfillment validates and consumes every exact reserva
     ...payload('multi-item-guard'),
     items: [{ menuItemId: 1, quantity: 2 }, { menuItemId: 2, quantity: 3 }],
   }
-  const attempt = await initiatePayment(database, multiItemPayload, 1, paymentConfig, provider())
+  const attempt = await initiatePayment(database, multiItemPayload, studentOneId, paymentConfig, provider())
   const gateway = provider({ async fetchProviderStatus() { return capturedPayment(attempt) } })
 
-  const paid = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
-  const repeated = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
+  const paid = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
+  const repeated = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
   assert.equal(paid.status, 'paid')
   assert.equal(repeated.order.id, paid.order.id)
   assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 1)
@@ -310,8 +313,8 @@ test('multi-item captured fulfillment validates and consumes every exact reserva
 test('reconciliation report identifies unresolved holds without releasing stock', async () => {
   const database = createDatabase()
   const gateway = provider()
-  const expired = await initiatePayment(database, payload('reconcile-expired'), 1, paymentConfig, gateway)
-  await initiatePayment(database, payload('reconcile-active'), 1, paymentConfig, gateway)
+  const expired = await initiatePayment(database, payload('reconcile-expired'), studentOneId, paymentConfig, gateway)
+  await initiatePayment(database, payload('reconcile-active'), studentOneId, paymentConfig, gateway)
   database.prepare("UPDATE payment_attempts SET status = 'expired' WHERE public_id = ?").run(expired.attemptId)
 
   const report = listPaymentReconciliationHolds(database, new Date())
@@ -328,16 +331,16 @@ test('reconciliation report identifies unresolved holds without releasing stock'
 
 test('owner reconciliation route is read-only and owner-restricted', async () => {
   const database = createDatabase()
-  const attempt = await initiatePayment(database, payload('reconcile-owner'), 1, paymentConfig, provider())
+  const attempt = await initiatePayment(database, payload('reconcile-owner'), studentOneId, paymentConfig, provider())
   database.prepare("UPDATE payment_attempts SET status = 'failed' WHERE public_id = ?").run(attempt.attemptId)
-  database.prepare(`INSERT INTO users
+  const ownerId = Number(database.prepare(`INSERT INTO users
     (public_id, role, display_name, phone_number, phone_verified, status)
-    VALUES ('reconciliation-owner', 'OWNER', 'Owner', '+919000000003', 1, 'ACTIVE')`).run()
+    VALUES ('reconciliation-owner', 'OWNER', 'Owner', '+919000000003', 1, 'ACTIVE')`).run().lastInsertRowid)
   const authConfig = { cookieName: 'reconciliation_session', cookieSecure: false,
     sessionTtlHours: 1, sessionTouchMinutes: 15 }
   const request = { method: 'GET', url: '/api/owner/payment-reconciliation',
     headers: { 'user-agent': 'reconciliation-test' }, socket: { remoteAddress: '127.0.0.1' } }
-  const session = createSession(database, 3, request, authConfig)
+  const session = createSession(database, ownerId, request, authConfig)
   request.headers.cookie = `${authConfig.cookieName}=${session.rawToken}`
   let statusCode
   let responseBody
@@ -359,15 +362,15 @@ test('owner reconciliation route is read-only and owner-restricted', async () =>
 test('ownership and invalid signatures are rejected without creating orders', async () => {
   const database = createDatabase()
   const gateway = provider({ verifyCheckoutResult: () => false })
-  const attempt = await initiatePayment(database, payload(), 1, paymentConfig, gateway)
+  const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
   const checkout = {
     attemptId: attempt.attemptId,
     razorpay_order_id: attempt.checkout.orderId,
     razorpay_payment_id: 'pay_TestPayment1',
     razorpay_signature: 'b'.repeat(64),
   }
-  await assert.rejects(verifyPayment(database, checkout, 2, paymentConfig, gateway), (error) => error.statusCode === 404)
-  await assert.rejects(verifyPayment(database, checkout, 1, paymentConfig, gateway), (error) => error.code === 'payment_signature_invalid')
+  await assert.rejects(verifyPayment(database, checkout, studentTwoId, paymentConfig, gateway), (error) => error.statusCode === 404)
+  await assert.rejects(verifyPayment(database, checkout, studentOneId, paymentConfig, gateway), (error) => error.code === 'payment_signature_invalid')
   assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 0)
 })
 
@@ -375,8 +378,8 @@ test('pending recovery creates no order; captured recovery creates one', async (
   const database = createDatabase()
   let recoveredPayment = null
   const gateway = provider({ async fetchProviderStatus() { return recoveredPayment } })
-  const attempt = await initiatePayment(database, payload(), 1, paymentConfig, gateway)
-  const pending = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
+  const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
+  const pending = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
   assert.equal(pending.order, null)
   recoveredPayment = {
     amountPaise: 14000,
@@ -388,8 +391,8 @@ test('pending recovery creates no order; captured recovery creates one', async (
     providerMessage: 'Captured.',
     status: 'paid',
   }
-  const paid = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
-  const repeated = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
+  const paid = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
+  const repeated = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
   assert.equal(paid.order.id, repeated.order.id)
   assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 1)
 })
@@ -398,7 +401,7 @@ test('mismatched amount, currency, or provider order never creates an order', as
   for (const mismatch of ['amount', 'currency', 'order']) {
     const database = createDatabase()
     const base = provider()
-    const attempt = await initiatePayment(database, payload(`request-${mismatch}`), 1, paymentConfig, base)
+    const attempt = await initiatePayment(database, payload(`request-${mismatch}`), studentOneId, paymentConfig, base)
     const payment = {
       amountPaise: mismatch === 'amount' ? 1 : 14000,
       captured: true,
@@ -410,7 +413,7 @@ test('mismatched amount, currency, or provider order never creates an order', as
       status: 'paid',
     }
     const gateway = { ...base, async fetchProviderStatus() { return payment } }
-    const result = await getPaymentStatus(database, attempt.attemptId, 1, paymentConfig, gateway)
+    const result = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
     assert.equal(result.order, null)
     assert.equal(result.status, 'failed')
     assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 0)

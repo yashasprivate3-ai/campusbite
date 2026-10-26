@@ -1255,7 +1255,6 @@ function AuthenticatedApp({ user }) {
     return (
       <PhoneVerificationDialog
         key={user.phoneNumber}
-        autoRequest
         mandatory
         onEditPhone={() => setIsEditingPhone(true)}
         user={user}

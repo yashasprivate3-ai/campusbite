@@ -7,11 +7,57 @@ function id(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(value)) throw invalid()
   return value
 }
+// Cashfree documents customer_id as alphanumeric only (3-50 characters), unlike
+// order_id which also allows '_' and '-'. Derive it deterministically from the
+// payment attempt so retries of the same attempt always send the same value.
+export function cashfreeCustomerId(attemptId) {
+  const value = `cust${String(attemptId ?? '').replace(/[^A-Za-z0-9]/g, '')}`
+  if (!/^[A-Za-z0-9]{3,50}$/.test(value) || value === 'cust') throw invalid()
+  return value
+}
+
+const SAFE_TOKEN = /^[A-Za-z0-9_.-]{1,64}$/
+function safeText(value, max = 200) {
+  if (typeof value !== 'string') return null
+  const cleaned = value
+    .replace(/\p{Cc}/gu, ' ')
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]')
+    .replace(/\+?\d[\d\s-]{4,}\d/g, '[number]')
+    .replace(/[A-Za-z0-9_-]{24,}/g, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return cleaned ? cleaned.slice(0, max) : null
+}
+
+// Only the HTTP status and Cashfree's own error code, type and validation message
+// are kept, each sanitized and length-limited. Request headers, credentials,
+// request bodies and anything that looks like a phone number, email or token
+// never reach the diagnostic.
+export function sanitizeCashfreeError(httpStatus, text) {
+  let body
+  try { body = JSON.parse(String(text ?? '').slice(0, 4096)) } catch { body = null }
+  const token = (value) => (typeof value === 'string' && SAFE_TOKEN.test(value) && !/[A-Za-z0-9]{24,}/.test(value) ? value : null)
+  return {
+    httpStatus: Number.isInteger(httpStatus) ? httpStatus : null,
+    code: token(body?.code),
+    type: token(body?.type),
+    message: safeText(body?.message),
+  }
+}
+
+function operationFor(path, method) {
+  if (method === 'POST' && path === '/orders') return 'create_order'
+  if (/\/payments$/.test(path)) return 'get_order_payments'
+  return 'get_order'
+}
+
+const defaultLogger = (line) => console.warn(line)
+
 function paise(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || !Number.isSafeInteger(Math.round(value * 100)) || Math.abs(value * 100 - Math.round(value * 100)) > 0.00001) throw invalid()
   return Math.round(value * 100)
 }
-export function createCashfreeProvider(config, fetchImplementation = fetch) {
+export function createCashfreeProvider(config, fetchImplementation = fetch, { logger = defaultLogger } = {}) {
   if (!config?.enabled || config.provider !== 'cashfree') return null
   const settings = config.cashfree
   if (!['sandbox', 'production'].includes(settings.environment) ||
@@ -32,8 +78,17 @@ export function createCashfreeProvider(config, fetchImplementation = fetch) {
     } catch {
       throw new PaymentProviderError('payment_gateway_timeout', 'Payment service unavailable. Check payment status before retrying.')
     }
-    if (response.status === 404) throw new PaymentProviderError('payment_order_not_found', 'The payment order was not found.')
-    if (!response.ok) throw new PaymentProviderError('payment_gateway_rejected', 'Payment service rejected the request.')
+    if (!response.ok) {
+      let text
+      try { text = (await response.text()).slice(0, 4096) } catch { text = '' }
+      const diagnostic = { operation: operationFor(path, options.method || 'GET'), ...sanitizeCashfreeError(response.status, text) }
+      try { logger(`[campusbite-api] Cashfree API error ${JSON.stringify(diagnostic)}`) } catch { /* logging must not change payment handling */ }
+      const error = response.status === 404
+        ? new PaymentProviderError('payment_order_not_found', 'The payment order was not found.')
+        : new PaymentProviderError('payment_gateway_rejected', 'Payment service rejected the request.')
+      error.providerDiagnostic = diagnostic
+      throw error
+    }
     const text = await response.text()
     if (text.length > 65536) throw invalid()
     try { return JSON.parse(text) } catch { throw invalid() }
@@ -56,7 +111,7 @@ export function createCashfreeProvider(config, fetchImplementation = fetch) {
       const order = await request('/orders', { method: 'POST',
         headers: { 'x-idempotency-key': attemptId.replace(/^pay_/, '') },
         body: JSON.stringify({ order_id: id(attemptId), order_amount: amountPaise / 100, order_currency: 'INR',
-          customer_details: { customer_id: attemptId, customer_phone: phoneNumber.slice(3) },
+          customer_details: { customer_id: cashfreeCustomerId(attemptId), customer_phone: phoneNumber.slice(3) },
           order_expiry_time: new Date(Date.now() + 15 * 60000).toISOString(),
           order_meta: { return_url: `${config.publicAppUrl}/?payment_return=1` } }),
       })

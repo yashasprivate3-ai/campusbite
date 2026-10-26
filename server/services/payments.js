@@ -325,7 +325,12 @@ export async function initiatePayment(database, payload, studentUserId, paymentC
       response_message = ?, updated_at = ? WHERE public_id = ? AND order_id IS NULL`)
       .run(pending ? 'pending' : 'failed', safe.code || error.code || 'gateway_error',
         safe.message || 'Payment initiation failed.', new Date().toISOString(), publicId)
-    recordEvent(database, 'PAYMENT_INITIATION_FAILED', studentUserId, { attemptId: publicId, reason: error.code || 'gateway_error' }, false)
+    const diagnostic = error.providerDiagnostic
+    recordEvent(database, 'PAYMENT_INITIATION_FAILED', studentUserId, {
+      attemptId: publicId,
+      reason: error.code || 'gateway_error',
+      ...(diagnostic ? { providerHttpStatus: diagnostic.httpStatus, providerCode: diagnostic.code, providerType: diagnostic.type } : {}),
+    }, false)
     throw error
   }
   attempt = selectAttempt(database, publicId)

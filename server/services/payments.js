@@ -13,6 +13,7 @@ const TERMINAL_STATUSES = new Set(['paid', 'failed', 'cancelled', 'expired'])
 // Reconciliation waits this long after the local checkout expiry before asking
 // the provider, so Cashfree has time to mark its own order as expired.
 export const RELEASE_GRACE_MS = 2 * 60_000
+export const CASHFREE_ATTEMPT_LIFETIME_MINUTES = 20
 const CAPTURED_UNFULFILLED = 'captured_unfulfilled'
 
 function requireObject(value, label) {
@@ -281,7 +282,12 @@ export async function initiatePayment(database, payload, studentUserId, paymentC
   const now = new Date()
   const publicId = `pay_${randomUUID()}`
   const placeholderOrderId = paymentConfig.provider === 'cashfree' ? publicId : `pending_${randomUUID()}`
-  const expiresAt = new Date(now.getTime() + (paymentConfig.attemptLifetimeMinutes || paymentConfig.razorpay?.attemptLifetimeMinutes || 15) * 60_000)
+  // Cashfree requires an order expiry more than 15 minutes away, so its attempts
+  // use a 20-minute deadline shared with the Cashfree order. Razorpay is unchanged.
+  const lifetimeMinutes = paymentConfig.provider === 'cashfree'
+    ? CASHFREE_ATTEMPT_LIFETIME_MINUTES
+    : (paymentConfig.attemptLifetimeMinutes || paymentConfig.razorpay?.attemptLifetimeMinutes || 15)
+  const expiresAt = new Date(now.getTime() + lifetimeMinutes * 60_000)
   database.exec('BEGIN IMMEDIATE;')
   try {
     database.prepare(`INSERT INTO payment_attempts (
@@ -307,6 +313,7 @@ export async function initiatePayment(database, payload, studentUserId, paymentC
       amountPaise: normalized.trustedCart.totalPaise,
       attemptId: publicId,
       phoneNumber: database.prepare('SELECT phone_number FROM users WHERE id = ?').get(studentUserId)?.phone_number,
+      expiresAt: expiresAt.toISOString(),
     })
     if (created.amountPaise !== normalized.trustedCart.totalPaise || created.currency !== 'INR') {
       throw new PaymentProviderError('payment_gateway_mismatch', 'The payment service returned a mismatched order.')

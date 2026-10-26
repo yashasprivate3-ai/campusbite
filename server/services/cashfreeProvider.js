@@ -53,6 +53,25 @@ function operationFor(path, method) {
 
 const defaultLogger = (line) => console.warn(line)
 
+// Cashfree rejects order_expiry_time unless it is more than 15 minutes and
+// less than 30 days away (code order_expiry_time_invalid). The caller passes
+// the payment attempt's absolute deadline so the local attempt and the
+// Cashfree order expire together; anything not safely inside the window is
+// refused here, before any request is sent.
+export const CASHFREE_MIN_EXPIRY_MS = 15 * 60_000
+export const CASHFREE_MAX_EXPIRY_MS = 30 * 24 * 60 * 60_000
+export const CASHFREE_EXPIRY_MARGIN_MS = 60_000
+export function cashfreeOrderExpiry(expiresAt, now = Date.now()) {
+  const deadline = typeof expiresAt === 'string' || expiresAt instanceof Date ? new Date(expiresAt).getTime() : NaN
+  const remaining = deadline - now
+  if (!Number.isFinite(deadline) ||
+      remaining < CASHFREE_MIN_EXPIRY_MS + CASHFREE_EXPIRY_MARGIN_MS ||
+      remaining > CASHFREE_MAX_EXPIRY_MS - CASHFREE_EXPIRY_MARGIN_MS) {
+    throw new PaymentProviderError('payment_expiry_unsafe', 'Payment service rejected the request.')
+  }
+  return new Date(deadline).toISOString()
+}
+
 function paise(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || !Number.isSafeInteger(Math.round(value * 100)) || Math.abs(value * 100 - Math.round(value * 100)) > 0.00001) throw invalid()
   return Math.round(value * 100)
@@ -106,13 +125,14 @@ export function createCashfreeProvider(config, fetchImplementation = fetch, { lo
   }
   return Object.freeze({
     name: 'cashfree',
-    async createProviderOrder({ amountPaise, attemptId, phoneNumber }) {
+    async createProviderOrder({ amountPaise, attemptId, phoneNumber, expiresAt }) {
       if (!/^\+91[6-9]\d{9}$/.test(phoneNumber || '')) throw invalid()
+      const orderExpiryTime = cashfreeOrderExpiry(expiresAt)
       const order = await request('/orders', { method: 'POST',
         headers: { 'x-idempotency-key': attemptId.replace(/^pay_/, '') },
         body: JSON.stringify({ order_id: id(attemptId), order_amount: amountPaise / 100, order_currency: 'INR',
           customer_details: { customer_id: cashfreeCustomerId(attemptId), customer_phone: phoneNumber.slice(3) },
-          order_expiry_time: new Date(Date.now() + 15 * 60000).toISOString(),
+          order_expiry_time: orderExpiryTime,
           order_meta: { return_url: `${config.publicAppUrl}/?payment_return=1` } }),
       })
       if (order.order_id !== attemptId || typeof order.payment_session_id !== 'string' || !order.payment_session_id) throw invalid()
@@ -131,6 +151,10 @@ export function createCashfreeProvider(config, fetchImplementation = fetch, { lo
         return result
       }
       if (['EXPIRED', 'TERMINATED'].includes(order.order_status)) {
+        // A payment started before expiry can still complete afterwards, so an
+        // in-flight attempt keeps the order payable and its stock held.
+        const inFlight = payments.find((payment) => payment.payment_status === 'PENDING')
+        if (inFlight) return normalize(inFlight, orderId)
         return { orderId, amountPaise: paise(order.order_amount), currency: order.order_currency,
           paymentId: null, captured: false, status: order.order_status === 'EXPIRED' ? 'expired' : 'cancelled',
           providerCode: order.order_status, providerMessage: 'The payment session ended without a confirmed payment.' }

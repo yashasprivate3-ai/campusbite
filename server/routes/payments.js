@@ -17,6 +17,7 @@ import {
   sendJson,
   sendMethodNotAllowed,
 } from '../services/http.js'
+import { logCashfreeWebhookRejection } from '../services/webhookDiagnostics.js'
 
 function requireStudent(database, request, authConfig, requireVerifiedPhone) {
   const authContext = requireRole(
@@ -65,9 +66,16 @@ export async function handlePaymentRoutes(
       sendJson(response, 503, { error: 'Payment provider unavailable.' })
       return true
     }
-    handlePaymentWebhook(database, await readRawBody(request),
-      request.headers[paymentProvider.name === 'cashfree' ? 'x-webhook-signature' : 'x-razorpay-signature'],
-      paymentConfig, paymentProvider, request.headers['x-webhook-timestamp'])
+    const rawBody = await readRawBody(request)
+    try {
+      handlePaymentWebhook(database, rawBody,
+        request.headers[paymentProvider.name === 'cashfree' ? 'x-webhook-signature' : 'x-razorpay-signature'],
+        paymentConfig, paymentProvider, request.headers['x-webhook-timestamp'])
+    } catch (error) {
+      // Diagnostic only: the rejection (status, code and message) is unchanged.
+      if (paymentProvider.name === 'cashfree') logCashfreeWebhookRejection(error, request.headers, rawBody)
+      throw error
+    }
     sendJson(response, 200, { received: true })
     return true
   }

@@ -164,12 +164,21 @@ export function createCashfreeProvider(config, fetchImplementation = fetch, { lo
       return latest ? normalize(latest, orderId) : null
     },
     parseWebhook(rawBody, signature, timestamp) {
-      if (!Buffer.isBuffer(rawBody) || typeof signature !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(signature) || typeof timestamp !== 'string' || !/^\d{10,16}$/.test(timestamp)) {
-        throw new ApiError(400, 'webhook_signature_invalid', 'Webhook verification failed.')
+      // Same strict checks and the same 400 response as before; each rejection
+      // only carries an internal category so the route can log a safe diagnostic.
+      const reject = (category) => {
+        const error = new ApiError(400, 'webhook_signature_invalid', 'Webhook verification failed.')
+        error.webhookRejection = category
+        return error
       }
+      if (signature === undefined || signature === '') throw reject('signature_missing')
+      if (typeof signature !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(signature)) throw reject('signature_malformed')
+      if (timestamp === undefined || timestamp === '') throw reject('timestamp_missing')
+      if (typeof timestamp !== 'string' || !/^\d{10,16}$/.test(timestamp)) throw reject('timestamp_malformed')
+      if (!Buffer.isBuffer(rawBody)) throw reject('signature_mismatch')
       const expected = createHmac('sha256', settings.clientSecret).update(timestamp).update(rawBody).digest('base64')
       if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
-        throw new ApiError(400, 'webhook_signature_invalid', 'Webhook verification failed.')
+        throw reject('signature_mismatch')
       }
       let event
       try { event = JSON.parse(rawBody.toString('utf8')) } catch { throw invalid() }

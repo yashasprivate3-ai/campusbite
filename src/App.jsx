@@ -422,6 +422,9 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   const [trackedOrderId, setTrackedOrderId] = useState(() =>
     user.role === 'STUDENT' ? loadTrackedOrderId(user.publicId) : null,
   )
+  // Bumped by the header Track order button so it always brings the tracking
+  // heading back into view, even when the tracking view is already open.
+  const [trackingFocusRequest, setTrackingFocusRequest] = useState(0)
   const [studentView, setStudentView] = useState(() =>
     user.role === 'STUDENT' && loadTrackedOrderId(user.publicId)
       ? 'tracking'
@@ -463,7 +466,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
 
   useEffect(() => {
     window.scrollTo(0, 0)
-  }, [activeView, studentView])
+  }, [activeView, studentView, trackingFocusRequest])
 
   useEffect(() => {
     if (canUseKitchen) {
@@ -857,6 +860,13 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
     setInstructions('')
   }
 
+  function showOrderTracking() {
+    setIsCartOpen(false)
+    if (studentView === 'tracking') void refreshTrackedOrder()
+    else setStudentView('tracking')
+    setTrackingFocusRequest((request) => request + 1)
+  }
+
   function openOrderTracking() {
     setCheckoutStep(null)
     setConfirmedOrder(null)
@@ -904,10 +914,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
             <button
               className={`header-track${studentView === 'tracking' ? ' active' : ''}`}
               type="button"
-              onClick={() => {
-                setStudentView('tracking')
-                setIsCartOpen(false)
-              }}
+              onClick={showOrderTracking}
               aria-label={`Track order ${trackedOrder?.token || trackedOrderId}`}
             >
               <span aria-hidden="true">◎</span>

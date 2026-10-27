@@ -29,6 +29,7 @@ import {
   verifyPayment,
 } from './services/paymentsApi'
 import { openPaymentCheckout } from './services/paymentCheckout'
+import { serviceStatus } from './services/serviceStatus'
 import {
   buildKitchenActivity,
   completeBatchRecord,
@@ -605,6 +606,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   }, [canUseKitchen, kitchenBatches, kitchenOrders, updateKitchenOrderStatus])
 
   const menuWithAvailability = menuItems.map(item => ({ ...item, live: liveMenu?.menu?.items.find(candidate => candidate.id === item.id) }))
+  const homeStatus = serviceStatus(liveMenu, menuWithAvailability)
   const visibleItems = menuWithAvailability.filter(item => activeCategory === 'All' || (activeCategory === 'Ready now' ? item.live?.preparationMinutes === 0 : item.category === activeCategory))
   const cartItems = menuItems.filter((item) => cart[item.id])
   const cartCount = cartItems.reduce((total, item) => total + cart[item.id], 0)
@@ -994,9 +996,9 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
             <h1>Order Smart just to Skip the long wait.</h1>
             <p className="welcome-copy">Fresh meals prepared when you need them.</p>
           </div>
-          <div className="service-status" aria-label="Current service status">
+          <div className={`service-status ${homeStatus.state}`} aria-label="Current service status" role="status">
             <span className="status-dot"></span>
-            <span><strong>We will be live shortly....❤️</strong><small>Average pickup : 8–10 minutes</small></span>
+            <span><strong>{homeStatus.title}</strong>{homeStatus.detail && <small>{homeStatus.detail}</small>}</span>
           </div>
         </section>
 

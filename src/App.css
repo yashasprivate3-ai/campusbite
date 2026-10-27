@@ -3681,3 +3681,42 @@ body {
     gap: 10px;
   }
 }
+
+/* Service status reflects the live menu: dim the dot unless ordering is open. */
+.service-status.checking .status-dot,
+.service-status.closed .status-dot {
+  background: #e9b872;
+  box-shadow: 0 0 0 6px rgba(233, 184, 114, 0.16);
+}
+
+/* Phone header: one tidy row for account controls (layout only). */
+@media (max-width: 620px) {
+  .workspace-role-badge,
+  .session-user {
+    display: none;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .session-controls {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .session-controls > button {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .session-profile-picture {
+    width: 32px;
+    height: 32px;
+  }
+}

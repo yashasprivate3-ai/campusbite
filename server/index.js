@@ -67,7 +67,11 @@ const server = createServer(async (request, response) => {
     if (requestUrl.pathname === '/api/menu') {
       requireAuth(optionalAuth(database, request, serverConfig.auth))
       if (request.method !== 'GET') { sendMethodNotAllowed(response, ['GET']); return }
-      sendJson(response, 200, menuAvailability(database, requestUrl.searchParams.get('pickupMethod') || 'asap', requestUrl.searchParams.get('pickupSlot')))
+      sendJson(response, 200, {
+        ...menuAvailability(database, requestUrl.searchParams.get('pickupMethod') || 'asap', requestUrl.searchParams.get('pickupSlot')),
+        // Lets the checkout avoid inviting payment while the server has payments switched off.
+        paymentsEnabled: Boolean(serverConfig.payments.enabled && paymentProvider),
+      })
       return
     }
 

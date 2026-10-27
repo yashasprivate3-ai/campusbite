@@ -14,7 +14,7 @@ const WORKSPACES = [
   },
   {
     role: 'Student',
-    description: 'Continue with Google, then verify your phone through WhatsApp.',
+    description: 'Continue with Google, then verify your phone with a one-time code.',
   },
 ]
 
@@ -171,7 +171,7 @@ export function LoginScreen() {
           <div className="future-auth-note">
             <strong>Phone onboarding</strong>
             <p>
-              After Google sign-in, verify your phone number through WhatsApp
+              After Google sign-in, verify your phone number with a one-time code
               to access your student workspace and place orders.
             </p>
           </div>

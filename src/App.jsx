@@ -607,6 +607,8 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
 
   const menuWithAvailability = menuItems.map(item => ({ ...item, live: liveMenu?.menu?.items.find(candidate => candidate.id === item.id) }))
   const homeStatus = serviceStatus(liveMenu, menuWithAvailability)
+  // Only an explicit server answer switches checkout off; payment is still verified server-side either way.
+  const paymentsOff = liveMenu?.menu?.paymentsEnabled === false
   const visibleItems = menuWithAvailability.filter(item => activeCategory === 'All' || (activeCategory === 'Ready now' ? item.live?.preparationMinutes === 0 : item.category === activeCategory))
   const cartItems = menuItems.filter((item) => cart[item.id])
   const cartCount = cartItems.reduce((total, item) => total + cart[item.id], 0)
@@ -702,7 +704,7 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
   }
 
   async function confirmOrder() {
-    if (isSubmittingOrder || cartItems.length === 0) return
+    if (isSubmittingOrder || cartItems.length === 0 || paymentsOff) return
 
     if (user.role === 'STUDENT' && !user.phoneVerified) {
       setCheckoutStep(null)
@@ -1189,17 +1191,24 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
                     {paymentMessage}
                   </div>
                 )}
+                {paymentsOff && user.phoneVerified && (
+                  <p className="payments-off-note" role="status">
+                    Online payment is not switched on yet, so orders can't be placed here for now.
+                  </p>
+                )}
                 <button
                   className="primary-action"
                   type="button"
                   onClick={confirmOrder}
-                  disabled={isSubmittingOrder}
+                  disabled={isSubmittingOrder || (paymentsOff && user.phoneVerified)}
                 >
                   {isSubmittingOrder
                     ? 'Connecting securely to the payment provider…'
-                    : user.phoneVerified
-                      ? `Pay securely with UPI · ₹${cartTotal}`
-                      : 'Verify phone to place order'}
+                    : !user.phoneVerified
+                      ? 'Verify phone to place order'
+                      : paymentsOff
+                        ? 'Online ordering opens soon'
+                        : `Pay securely with UPI · ₹${cartTotal}`}
                 </button>
               </div>
             )}

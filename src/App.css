@@ -3720,3 +3720,20 @@ body {
     height: 32px;
   }
 }
+
+/* Disabled menu buttons must look unavailable. */
+.add-button:disabled {
+  color: #5b6b63;
+  background: #d5ddd8;
+  cursor: not-allowed;
+}
+
+.payments-off-note {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  color: #604923;
+  background: #fff0cf;
+  font-size: 13px;
+  font-weight: 700;
+}

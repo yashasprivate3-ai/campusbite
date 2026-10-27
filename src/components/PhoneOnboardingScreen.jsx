@@ -82,7 +82,7 @@ export function PhoneOnboardingScreen({ isCorrection, onCancel, onCompleted }) {
               ? 'Add your course and class to complete your profile.'
               : isCorrection
               ? 'You can correct this number while it remains unverified.'
-              : 'Add your Indian mobile number, then verify it on WhatsApp to continue.'}
+              : 'Add your Indian mobile number, then verify it with a one-time code to continue.'}
           </p>
         </div>
 
@@ -129,8 +129,8 @@ export function PhoneOnboardingScreen({ isCorrection, onCancel, onCompleted }) {
           {!phoneWillRemainVerified && <div className="phone-unverified-note">
             <strong>Not verified yet</strong>
             <span>
-              After saving, we will send a one-time WhatsApp code to verify
-              phone ownership before opening the Student workspace.
+              Next, you will verify this number with a one-time code
+              before opening the Student workspace.
             </span>
           </div>}
 

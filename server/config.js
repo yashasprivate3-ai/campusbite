@@ -12,7 +12,7 @@ try {
 }
 
 function readPort(value, label = 'CAMPUSBITE_API_PORT') {
-  const port = Number(value || 3001)
+  const port = Number(value || (process.env.PORT || 10000))
 
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid ${label}: ${value}`)
@@ -171,7 +171,7 @@ const razorpayWebhookSecret = String(
 const usePlatformPort = isProduction && Boolean(process.env.PORT)
 
 export const serverConfig = Object.freeze({
-  host: process.env.CAMPUSBITE_API_HOST || (isProduction ? '0.0.0.0' : '127.0.0.1'),
+  host: process.env.CAMPUSBITE_API_HOST || (isProduction ? '0.0.0.0' : '0.0.0.0'),
   port: readPort(
     usePlatformPort ? process.env.PORT : process.env.CAMPUSBITE_API_PORT,
     usePlatformPort ? 'PORT' : 'CAMPUSBITE_API_PORT',

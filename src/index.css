@@ -37,3 +37,7 @@ button {
   color: #fff;
   background: #df6c46;
 }
+
+.policy-links { display:flex; flex-wrap:wrap; justify-content:center; gap:12px 22px; padding:22px; background:#183d30; }
+.policy-links a { color:#fff8e9; font-size:14px; text-underline-offset:4px; }
+.policy-links a:focus-visible { outline:3px solid #df6c46; outline-offset:5px; }

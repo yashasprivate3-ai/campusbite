@@ -5,11 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.js",
+    "start": "npm run server",
+    "dev:all": "node server/dev.js",
     "build": "vite build",
     "lint": "eslint .",
+    "test": "node --test --test-isolation=none server/tests/*.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
+    "google-auth-library": "^10.9.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

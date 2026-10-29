@@ -1,0 +1,322 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const serverDirectory = path.dirname(fileURLToPath(import.meta.url))
+const projectRoot = path.resolve(serverDirectory, '..')
+const environmentPath = path.join(projectRoot, '.env')
+
+try {
+  process.loadEnvFile(environmentPath)
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error
+}
+
+function readPort(value, label = 'CAMPUSBITE_API_PORT') {
+  const port = Number(value || 3001)
+
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid ${label}: ${value}`)
+  }
+
+  return port
+}
+
+function readInteger(value, fallback, label, { min, max }) {
+  const result = Number(value || fallback)
+
+  if (!Number.isInteger(result) || result < min || result > max) {
+    throw new Error(`Invalid ${label}: ${value}`)
+  }
+
+  return result
+}
+
+function readBoolean(value, fallback = false) {
+  if (value === undefined || value === '') return fallback
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new Error(`Expected true or false, received: ${value}`)
+}
+
+function readCookieName(value) {
+  const cookieName = value || 'campusbite_session'
+
+  if (!/^[A-Za-z0-9_-]+$/.test(cookieName)) {
+    throw new Error('CAMPUSBITE_AUTH_COOKIE_NAME contains invalid characters.')
+  }
+
+  return cookieName
+}
+
+function readOtpProvider(value) {
+  const provider = String(value || 'development').trim().toLowerCase()
+
+  if (!['development', 'meta-whatsapp', 'msg91'].includes(provider)) {
+    throw new Error(
+      'CAMPUSBITE_OTP_PROVIDER must be development, meta-whatsapp, or msg91.',
+    )
+  }
+
+  return provider
+}
+
+function readOtpSecret(value) {
+  const secret = String(value || '')
+
+  if (secret.length < 32) {
+    throw new Error('CAMPUSBITE_OTP_HASH_SECRET must contain at least 32 characters.')
+  }
+
+  return secret
+}
+
+function readDevelopmentOtpCode(value, provider) {
+  if (provider !== 'development') return null
+
+  const code = String(value || '')
+  if (!/^\d{6}$/.test(code)) {
+    throw new Error('CAMPUSBITE_DEV_OTP_CODE must be exactly six digits.')
+  }
+
+  return code
+}
+
+function readPaymentProvider(value) {
+  const provider = String(value || 'disabled').trim().toLowerCase()
+
+  if (!['disabled', 'razorpay', 'cashfree'].includes(provider)) {
+    throw new Error('CAMPUSBITE_PAYMENT_PROVIDER must be disabled, razorpay or cashfree.')
+  }
+
+  return provider
+}
+
+function requirePaymentValue(value, label, provider) {
+  const normalized = String(value || '').trim()
+  if (provider === 'razorpay' && !normalized) {
+    throw new Error(`${label} is required when Razorpay payments are enabled.`)
+  }
+  return normalized
+}
+
+function readPublicAppUrl(value, provider) {
+  const normalized = String(value || '').trim()
+  if (provider === 'disabled' && !normalized) return 'http://localhost:5173'
+
+  let parsed
+  try {
+    parsed = new URL(normalized)
+  } catch {
+    throw new Error('CAMPUSBITE_PUBLIC_APP_URL must be an absolute URL.')
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('CAMPUSBITE_PUBLIC_APP_URL must use HTTP or HTTPS.')
+  }
+
+  if (isProduction && parsed.protocol !== 'https:') {
+    throw new Error('CAMPUSBITE_PUBLIC_APP_URL must use HTTPS in production.')
+  }
+
+  return parsed.origin
+}
+
+const nodeEnvironment = process.env.NODE_ENV || 'development'
+const isProduction = nodeEnvironment === 'production'
+const developmentAccountsEnabled =
+  !isProduction && readBoolean(process.env.CAMPUSBITE_DEV_ACCOUNTS_ENABLED)
+const googleLoginEnabled = readBoolean(
+  process.env.CAMPUSBITE_GOOGLE_LOGIN_ENABLED,
+)
+const googleClientId = String(process.env.GOOGLE_CLIENT_ID || '').trim()
+const googleFrontendClientId = String(
+  process.env.VITE_GOOGLE_CLIENT_ID || '',
+).trim()
+const otpProvider = readOtpProvider(process.env.CAMPUSBITE_OTP_PROVIDER)
+const paymentProvider = readPaymentProvider(
+  process.env.CAMPUSBITE_PAYMENT_PROVIDER,
+)
+const razorpayEnvironment = String(
+  process.env.RAZORPAY_ENVIRONMENT || 'test',
+).trim().toLowerCase()
+
+if (isProduction && otpProvider === 'development') {
+  throw new Error('The development OTP provider cannot run in production.')
+}
+
+if (paymentProvider === 'razorpay' && razorpayEnvironment !== 'test') {
+  throw new Error('Only RAZORPAY_ENVIRONMENT=test is supported; live payments are not enabled.')
+}
+
+const razorpayKeyId = requirePaymentValue(
+  process.env.RAZORPAY_KEY_ID,
+  'RAZORPAY_KEY_ID',
+  paymentProvider,
+)
+// A test environment label alone must never authorize a live credential.
+if (paymentProvider === 'razorpay' && !/^rzp_test_[A-Za-z0-9]+$/.test(razorpayKeyId)) {
+  throw new Error('RAZORPAY_KEY_ID must be a Razorpay Test Mode key.')
+}
+
+const razorpayKeySecret = requirePaymentValue(
+  process.env.RAZORPAY_KEY_SECRET,
+  'RAZORPAY_KEY_SECRET',
+  paymentProvider,
+)
+const razorpayWebhookSecret = String(
+  process.env.RAZORPAY_WEBHOOK_SECRET || '',
+).trim()
+
+// Hosted production uses the platform listener; local development retains its port.
+const usePlatformPort = isProduction && Boolean(process.env.PORT)
+
+export const serverConfig = Object.freeze({
+  host: process.env.CAMPUSBITE_API_HOST || (isProduction ? '0.0.0.0' : '127.0.0.1'),
+  port: readPort(
+    usePlatformPort ? process.env.PORT : process.env.CAMPUSBITE_API_PORT,
+    usePlatformPort ? 'PORT' : 'CAMPUSBITE_API_PORT',
+  ),
+  databasePath: path.resolve(
+    projectRoot,
+    process.env.CAMPUSBITE_DB_PATH || 'data/campusbite.db',
+  ),
+  nodeEnvironment,
+  isProduction,
+  payments: Object.freeze({
+    provider: paymentProvider,
+    enabled: paymentProvider !== 'disabled',
+    publicAppUrl: readPublicAppUrl(
+      process.env.CAMPUSBITE_PUBLIC_APP_URL,
+      paymentProvider,
+    ),
+    cashfree: Object.freeze({
+      environment: process.env.CASHFREE_ENVIRONMENT || 'sandbox',
+      clientId: (process.env.CASHFREE_ENVIRONMENT === 'production' ? process.env.CASHFREE_PRODUCTION_CLIENT_ID : process.env.CASHFREE_SANDBOX_CLIENT_ID) || '',
+      clientSecret: (process.env.CASHFREE_ENVIRONMENT === 'production' ? process.env.CASHFREE_PRODUCTION_CLIENT_SECRET : process.env.CASHFREE_SANDBOX_CLIENT_SECRET) || '',
+      livePaymentsApproved: readBoolean(process.env.CAMPUSBITE_LIVE_PAYMENTS_APPROVED),
+    }),
+    razorpay: Object.freeze({
+      environment: razorpayEnvironment,
+      keyId: razorpayKeyId,
+      keySecret: razorpayKeySecret,
+      webhookSecret: razorpayWebhookSecret,
+      apiHost: 'https://api.razorpay.com',
+      requestTimeoutMilliseconds: 10_000,
+      attemptLifetimeMinutes: 15,
+    }),
+  }),
+  auth: Object.freeze({
+    cookieName: readCookieName(process.env.CAMPUSBITE_AUTH_COOKIE_NAME),
+    cookieSecure:
+      isProduction || readBoolean(process.env.CAMPUSBITE_AUTH_COOKIE_SECURE),
+    sessionTtlHours: readInteger(
+      process.env.CAMPUSBITE_AUTH_SESSION_TTL_HOURS,
+      12,
+      'CAMPUSBITE_AUTH_SESSION_TTL_HOURS',
+      { min: 1, max: 720 },
+    ),
+    sessionTouchMinutes: readInteger(
+      process.env.CAMPUSBITE_AUTH_SESSION_TOUCH_MINUTES,
+      15,
+      'CAMPUSBITE_AUTH_SESSION_TOUCH_MINUTES',
+      { min: 1, max: 120 },
+    ),
+    loginMaxAttempts: readInteger(
+      process.env.CAMPUSBITE_AUTH_LOGIN_MAX_ATTEMPTS,
+      5,
+      'CAMPUSBITE_AUTH_LOGIN_MAX_ATTEMPTS',
+      { min: 3, max: 20 },
+    ),
+    loginWindowMinutes: readInteger(
+      process.env.CAMPUSBITE_AUTH_LOGIN_WINDOW_MINUTES,
+      10,
+      'CAMPUSBITE_AUTH_LOGIN_WINDOW_MINUTES',
+      { min: 1, max: 60 },
+    ),
+    developmentAccountsEnabled,
+    google: Object.freeze({
+      clientId: googleClientId,
+      configured:
+        googleLoginEnabled &&
+        Boolean(googleClientId) &&
+        Boolean(googleFrontendClientId) &&
+        googleClientId === googleFrontendClientId,
+      enabled: googleLoginEnabled,
+      frontendClientId: googleFrontendClientId,
+    }),
+    otp: Object.freeze({
+      provider: otpProvider,
+      developmentCode: readDevelopmentOtpCode(
+        process.env.CAMPUSBITE_DEV_OTP_CODE,
+        otpProvider,
+      ),
+      hashSecret: readOtpSecret(process.env.CAMPUSBITE_OTP_HASH_SECRET),
+      expiresMinutes: 5,
+      resendCooldownSeconds: 60,
+      maxAttempts: 5,
+      userPhoneRequestsPerHour: 5,
+      ipRequestsPerHour: 20,
+      msg91: Object.freeze({
+        authkey: String(process.env.CAMPUSBITE_MSG91_AUTHKEY || '').trim(),
+        requestTimeoutMilliseconds: readInteger(
+          process.env.CAMPUSBITE_MSG91_REQUEST_TIMEOUT_MS,
+          8_000,
+          'CAMPUSBITE_MSG91_REQUEST_TIMEOUT_MS',
+          { min: 1_000, max: 30_000 },
+        ),
+      }),
+      metaWhatsApp: Object.freeze({
+        accessToken: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_ACCESS_TOKEN || '',
+        ).trim(),
+        phoneNumberId: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_PHONE_NUMBER_ID || '',
+        ).trim(),
+        wabaId: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_WABA_ID || '',
+        ).trim(),
+        templateName: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_TEMPLATE_NAME || '',
+        ).trim(),
+        templateLanguage: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_TEMPLATE_LANGUAGE || 'en',
+        ).trim(),
+        graphVersion: String(
+          process.env.CAMPUSBITE_META_WHATSAPP_GRAPH_VERSION || '',
+        ).trim(),
+        requestTimeoutMilliseconds: readInteger(
+          process.env.CAMPUSBITE_META_WHATSAPP_REQUEST_TIMEOUT_MS,
+          10_000,
+          'CAMPUSBITE_META_WHATSAPP_REQUEST_TIMEOUT_MS',
+          { min: 1_000, max: 30_000 },
+        ),
+      }),
+    }),
+    resetDevelopmentPasswords:
+      developmentAccountsEnabled &&
+      readBoolean(process.env.CAMPUSBITE_DEV_RESET_PASSWORDS),
+    developmentAccounts: Object.freeze([
+      Object.freeze({
+        role: 'OWNER',
+        displayName: process.env.CAMPUSBITE_DEV_OWNER_NAME || 'CampusBite Owner',
+        identifier: process.env.CAMPUSBITE_DEV_OWNER_LOGIN || '',
+        password: process.env.CAMPUSBITE_DEV_OWNER_PASSWORD || '',
+      }),
+      Object.freeze({
+        role: 'KITCHEN',
+        displayName:
+          process.env.CAMPUSBITE_DEV_KITCHEN_NAME || 'CampusBite Kitchen',
+        identifier: process.env.CAMPUSBITE_DEV_KITCHEN_LOGIN || '',
+        password: process.env.CAMPUSBITE_DEV_KITCHEN_PASSWORD || '',
+      }),
+      Object.freeze({
+        role: 'STUDENT',
+        displayName:
+          process.env.CAMPUSBITE_DEV_STUDENT_NAME || 'Development Student',
+        identifier: process.env.CAMPUSBITE_DEV_STUDENT_LOGIN || '',
+        password: process.env.CAMPUSBITE_DEV_STUDENT_PASSWORD || '',
+      }),
+    ]),
+  }),
+  projectRoot,
+})

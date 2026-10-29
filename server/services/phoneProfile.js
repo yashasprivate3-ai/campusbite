@@ -1,0 +1,137 @@
+import { invalidRequest } from './apiError.js'
+import { getSafeUserById, recordAuthEvent } from './auth.js'
+
+export function normalizeIndianMobileNumber(value) {
+  if (typeof value !== 'string') {
+    throw invalidRequest('Phone number must be a string.')
+  }
+
+  const compact = value.trim().replace(/[\s()-]/g, '')
+  let nationalNumber = compact
+
+  if (compact.startsWith('+91')) nationalNumber = compact.slice(3)
+  else if (compact.startsWith('91') && compact.length === 12) {
+    nationalNumber = compact.slice(2)
+  } else if (compact.startsWith('0') && compact.length === 11) {
+    nationalNumber = compact.slice(1)
+  }
+
+  if (!/^[6-9]\d{9}$/.test(nationalNumber)) {
+    throw invalidRequest(
+      'Enter a valid 10-digit Indian mobile number beginning with 6, 7, 8 or 9.',
+    )
+  }
+
+  return `+91${nationalNumber}`
+}
+
+function maskPhoneNumber(phoneNumber) {
+  return `${phoneNumber.slice(0, 3)}******${phoneNumber.slice(-4)}`
+}
+
+function normalizeStudentDetail(value, label) {
+  if (typeof value !== 'string') throw invalidRequest(label + ' is required.')
+  const normalized = value.trim().replace(/\s+/g, ' ')
+  if (!normalized || normalized.length > 80 || [...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) {
+    throw invalidRequest('Enter a valid ' + label.toLowerCase() + ' (1–80 characters).')
+  }
+  return normalized
+}
+
+export function updateStudentPhone(database, userId, payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw invalidRequest('Request body must be an object.')
+  }
+
+  const phoneNumber = normalizeIndianMobileNumber(payload.phoneNumber)
+  const current = database
+    .prepare(
+      `SELECT phone_number, phone_verified, onboarding_completed_at, course, student_class, student_profile_required
+         FROM users
+        WHERE id = ? AND role = 'STUDENT' AND status = 'ACTIVE'`,
+    )
+    .get(userId)
+
+  if (!current) throw invalidRequest('Student profile is unavailable.')
+
+  const updatingDetails = current.student_profile_required || Object.hasOwn(payload, 'course') || Object.hasOwn(payload, 'studentClass')
+  const course = updatingDetails ? normalizeStudentDetail(payload.course ?? current.course, 'Course') : current.course
+  const studentClass = updatingDetails ? normalizeStudentDetail(payload.studentClass ?? current.student_class, 'Class') : current.student_class
+  const changed = current.phone_number !== phoneNumber
+  const firstPhone = !current.phone_number
+  const completedNow = !current.onboarding_completed_at
+  const updatedAt = new Date().toISOString()
+
+  database.exec('BEGIN IMMEDIATE;')
+  try {
+    database
+      .prepare(
+        `UPDATE users
+            SET phone_number = ?, course = ?, student_class = ?,
+                phone_verified = CASE WHEN ? THEN 0 ELSE phone_verified END,
+                phone_verified_at = CASE WHEN ? THEN NULL ELSE phone_verified_at END,
+                onboarding_completed_at = COALESCE(onboarding_completed_at, ?),
+                updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(
+        phoneNumber,
+        course,
+        studentClass,
+        changed ? 1 : 0,
+        changed ? 1 : 0,
+        updatedAt,
+        updatedAt,
+        userId,
+      )
+
+    if (changed) {
+      database
+        .prepare(
+          `UPDATE phone_verification_challenges
+              SET invalidated_at = ?, updated_at = ?
+            WHERE user_id = ? AND consumed_at IS NULL AND invalidated_at IS NULL`,
+        )
+        .run(updatedAt, updatedAt, userId)
+    }
+
+    if (changed) {
+      recordAuthEvent(database, {
+        eventType: firstPhone ? 'PHONE_ADDED' : 'PHONE_CHANGED',
+        success: true,
+        userId,
+        metadata: {
+          maskedPhone: maskPhoneNumber(phoneNumber),
+          phoneVerified: false,
+        },
+      })
+
+      if (!firstPhone) {
+        recordAuthEvent(database, {
+          eventType: 'PHONE_CHANGED_VERIFICATION_RESET',
+          success: true,
+          userId,
+          metadata: {
+            maskedPhone: maskPhoneNumber(phoneNumber),
+            phoneVerified: false,
+          },
+        })
+      }
+    }
+    if (completedNow) {
+      recordAuthEvent(database, {
+        eventType: 'PHONE_ONBOARDING_COMPLETED',
+        success: true,
+        userId,
+        metadata: { phoneVerified: false },
+      })
+    }
+
+    database.exec('COMMIT;')
+  } catch (error) {
+    database.exec('ROLLBACK;')
+    throw error
+  }
+
+  return getSafeUserById(database, userId)
+}

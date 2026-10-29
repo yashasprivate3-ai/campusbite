@@ -1,0 +1,79 @@
+export function sendJson(response, statusCode, payload) {
+  response.writeHead(statusCode, {
+    'Cache-Control': 'no-store',
+    'Content-Type': 'application/json; charset=utf-8',
+  })
+  response.end(JSON.stringify(payload))
+}
+
+export async function readRawBody(request, maxBytes = 64 * 1024) {
+  const chunks = []
+  let size = 0
+
+  for await (const chunk of request) {
+    size += chunk.length
+
+    if (size > maxBytes) {
+      const error = new Error('Request body is too large.')
+      error.statusCode = 413
+      error.code = 'payload_too_large'
+      throw error
+    }
+
+    chunks.push(chunk)
+  }
+
+  return Buffer.concat(chunks)
+}
+
+export async function readJsonBody(request, maxBytes = 64 * 1024) {
+  const body = await readRawBody(request, maxBytes)
+  if (body.length === 0) return {}
+
+  try {
+    return JSON.parse(body.toString('utf8'))
+  } catch {
+    const error = new Error('Request body must contain valid JSON.')
+    error.statusCode = 400
+    error.code = 'invalid_json'
+    throw error
+  }
+}
+
+export function sendApiError(response, error) {
+  const payload = {
+    error: error.code || 'internal_server_error',
+    message: error.message || 'An unexpected server error occurred',
+  }
+
+  if (error.details !== undefined) payload.details = error.details
+  if (error.code === 'too_many_login_attempts') {
+    response.setHeader(
+      'Retry-After',
+      String(error.details?.retryAfterSeconds || 60),
+    )
+  }
+  sendJson(response, error.statusCode || 500, payload)
+}
+
+export function sendMethodNotAllowed(response, allowedMethods) {
+  response.setHeader('Allow', allowedMethods.join(', '))
+  sendJson(response, 405, {
+    error: 'method_not_allowed',
+    message: `Use ${allowedMethods.join(' or ')} for this API route.`,
+  })
+}
+
+export function sendNotFound(response) {
+  sendJson(response, 404, {
+    error: 'not_found',
+    message: 'API route not found',
+  })
+}
+
+export function sendInternalServerError(response) {
+  sendJson(response, 500, {
+    error: 'internal_server_error',
+    message: 'An unexpected server error occurred',
+  })
+}

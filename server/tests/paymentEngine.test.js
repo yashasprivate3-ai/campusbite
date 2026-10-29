@@ -1,0 +1,459 @@
+import assert from 'node:assert/strict'
+const orderingClock = () => new Date('2099-10-17T06:30:00Z')
+function seedStock(db) { for (let id = 1; id <= 6; id++) db.prepare('INSERT OR IGNORE INTO daily_menu_stock (service_date, menu_item_id, quantity) VALUES (?, ?, ?)').run('2099-10-17', id, 1000) }
+import { afterEach, test } from 'node:test'
+import { initializeDatabase } from '../db.js'
+import { buildTrustedCartSnapshot } from '../data/menu.js'
+import { createHmac } from 'node:crypto'
+import { Readable } from 'node:stream'
+import { handlePaymentRoutes } from '../routes/payments.js'
+import { readRawBody } from '../services/http.js'
+import { createSession } from '../services/auth.js'
+import {
+  getPaymentStatus,
+  handlePaymentWebhook,
+  initiatePayment,
+  listPaymentReconciliationHolds,
+  verifyPayment,
+} from '../services/payments.js'
+import { createRazorpayProvider } from '../services/razorpayProvider.js'
+
+const databases = []
+const paymentConfig = {
+  orderingClock, enabled: true,
+  provider: 'razorpay',
+  razorpay: { attemptLifetimeMinutes: 15 },
+}
+
+// Fixtures use the inserted user ids so tests also run against pre-populated databases.
+let studentOneId
+let studentTwoId
+function createDatabase() {
+  const database = initializeDatabase(':memory:')
+  seedStock(database)
+  databases.push(database)
+  studentOneId = Number(database.prepare(`INSERT INTO users
+    (public_id, role, display_name, phone_number, phone_verified, status)
+    VALUES (?, 'STUDENT', ?, ?, 1, 'ACTIVE')`).run('student-one', 'Student One', '+919000000001').lastInsertRowid)
+  studentTwoId = Number(database.prepare(`INSERT INTO users
+    (public_id, role, display_name, phone_number, phone_verified, status)
+    VALUES (?, 'STUDENT', ?, ?, 1, 'ACTIVE')`).run('student-two', 'Student Two', '+919000000002').lastInsertRowid)
+  return database
+}
+
+afterEach(() => {
+  while (databases.length) databases.pop().close()
+})
+
+const webhookSecret = 'synthetic-webhook-secret'
+function webhookGateway(secret = webhookSecret) {
+  return createRazorpayProvider({ ...paymentConfig, razorpay: {
+    keyId: 'rzp_test_synthetic', keySecret: 'different-synthetic-api-secret', webhookSecret: secret,
+  } }, () => { throw new Error('Webhook must not make network requests.') })
+}
+
+function signedEvent(overrides = {}, eventType = 'payment.captured') {
+  const body = Buffer.from(JSON.stringify({ event: eventType, payload: { payment: { entity: {
+    id: 'pay_TestPayment1', order_id: 'order_TestOrder1', amount: 14000,
+    currency: 'INR', status: 'captured', captured: true, ...overrides,
+  } } } }))
+  return [body, createHmac('sha256', webhookSecret).update(body).digest('hex')]
+}
+
+test('webhook checks exact raw bytes, dedicated secret, malformed signatures and JSON', () => {
+  const gateway = webhookGateway()
+  const [body, signature] = signedEvent()
+  assert.equal(gateway.parseWebhook(body, signature).paymentId, 'pay_TestPayment1')
+  for (const invalid of [undefined, '', '0'.repeat(64), ['a'.repeat(64)], 'z'.repeat(64)]) {
+    assert.throws(() => gateway.parseWebhook(body, invalid), { code: 'webhook_signature_invalid' })
+  }
+  assert.throws(() => gateway.parseWebhook(Buffer.concat([body, Buffer.from(' ')]), signature), { code: 'webhook_signature_invalid' })
+  assert.throws(() => webhookGateway('').parseWebhook(body, signature), { code: 'webhook_unavailable' })
+  const malformed = Buffer.from('{')
+  assert.throws(() => gateway.parseWebhook(malformed, createHmac('sha256', webhookSecret).update(malformed).digest('hex')), { code: 'invalid_webhook' })
+})
+
+test('duplicate and out-of-order webhooks recover terminal attempts with exactly one order', async () => {
+  for (const status of ['initiated', 'failed', 'cancelled', 'expired']) {
+    const database = createDatabase()
+    const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, provider())
+    database.prepare('UPDATE payment_attempts SET status = ?').run(status)
+    const deliver = (event) => handlePaymentWebhook(database, ...event, paymentConfig, webhookGateway())
+    deliver(signedEvent({}, 'payment.failed'))
+    assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
+    deliver(signedEvent())
+    deliver(signedEvent())
+    deliver(signedEvent({}, 'order.paid'))
+    deliver(signedEvent({}, 'payment.authorized'))
+    const result = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, provider())
+    assert.equal(result.status, 'paid')
+    assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
+    const reservations = database.prepare('SELECT status FROM stock_reservations').all()
+    assert.ok(reservations.length > 0)
+    assert.ok(reservations.every(row => row.status === 'consumed'))
+    const repeated = await verifyPayment(database, { attemptId: attempt.attemptId }, studentOneId, paymentConfig, provider())
+    assert.equal(repeated.order.id, result.order.id)
+  }
+})
+
+test('webhook rejects mismatches and noncaptured payloads without changing the attempt', async () => {
+  const database = createDatabase()
+  await initiatePayment(database, payload(), studentOneId, paymentConfig, provider())
+  for (const overrides of [{ amount: 1 }, { amount: '14000' }, { currency: 'USD' },
+    { captured: false }, { status: 'authorized' }, { id: 'invalid' }]) {
+    assert.throws(() => handlePaymentWebhook(database, ...signedEvent(overrides), paymentConfig, webhookGateway()))
+  }
+  handlePaymentWebhook(database, ...signedEvent({ order_id: 'order_Unrelated1' }), paymentConfig, webhookGateway())
+  assert.equal(database.prepare('SELECT status FROM payment_attempts').get().status, 'initiated')
+  assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
+  handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
+  assert.throws(() => handlePaymentWebhook(database, ...signedEvent({ id: 'pay_Different1' }), paymentConfig, webhookGateway()), { code: 'webhook_payment_mismatch' })
+  assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
+})
+
+test('webhook cannot reuse a payment linked to another attempt and rolls back failed fulfillment', async () => {
+  const database = createDatabase()
+  const gateway = provider()
+  await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
+  await initiatePayment(database, payload('request-0002'), studentOneId, paymentConfig, gateway)
+  database.exec("CREATE TRIGGER fail_order BEFORE INSERT ON orders BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;")
+  assert.throws(() => handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway()))
+  assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 0)
+  assert.ok(database.prepare('SELECT status FROM stock_reservations').all().every(row => row.status === 'held'))
+  assert.equal(database.prepare('SELECT status FROM payment_attempts ORDER BY id LIMIT 1').get().status, 'initiated')
+  database.exec('DROP TRIGGER fail_order;')
+  handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
+  assert.throws(() => handlePaymentWebhook(database, ...signedEvent({ order_id: 'order_TestOrder2' }), paymentConfig, webhookGateway()), { code: 'webhook_payment_mismatch' })
+  assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
+})
+
+test('webhook overlapping checkout and polling fulfillment still creates exactly one order', async () => {
+  for (const path of ['checkout', 'polling']) {
+    const database = createDatabase()
+    const base = provider()
+    const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, base)
+    let finishFetch
+    const gateway = { ...base,
+      fetchPayment: () => new Promise((resolve) => { finishFetch = resolve }),
+      fetchProviderStatus: () => new Promise((resolve) => { finishFetch = resolve }),
+    }
+    const pending = path === 'checkout'
+      ? verifyPayment(database, { attemptId: attempt.attemptId, razorpay_order_id: attempt.checkout.orderId,
+        razorpay_payment_id: 'pay_TestPayment1', razorpay_signature: 'a'.repeat(64) }, studentOneId, paymentConfig, gateway)
+      : getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
+    handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
+    finishFetch(await base.fetchPayment())
+    assert.equal((await pending).status, 'paid')
+    handlePaymentWebhook(database, ...signedEvent(), paymentConfig, webhookGateway())
+    assert.equal(database.prepare('SELECT count(*) AS n FROM orders').get().n, 1)
+  }
+})
+
+test('public webhook route accepts signed bytes without student auth and limits body size', async () => {
+  const database = createDatabase()
+  await initiatePayment(database, payload(), studentOneId, paymentConfig, provider())
+  const [body, signature] = signedEvent()
+  const request = Readable.from([body.subarray(0, 30), body.subarray(30)])
+  request.method = 'POST'
+  request.headers = { 'x-razorpay-signature': signature }
+  let result
+  const response = { writeHead(status) { assert.equal(status, 200) }, end(value) { result = JSON.parse(value) } }
+  assert.equal(await handlePaymentRoutes(request, response, new URL('http://localhost/api/payments/webhook/razorpay'), database, {}, paymentConfig, webhookGateway()), true)
+  assert.deepEqual(result, { received: true })
+  await assert.rejects(readRawBody(Readable.from([Buffer.alloc(65537)])), { statusCode: 413 })
+  let methodStatus
+  await handlePaymentRoutes({ method: 'GET' }, { setHeader() {}, writeHead(status) { methodStatus = status }, end() {} },
+    new URL('http://localhost/api/payments/webhook/razorpay'), database, {}, paymentConfig, webhookGateway())
+  assert.equal(methodStatus, 405)
+})
+
+function payload(idempotencyKey = 'request-0001') {
+  return {
+    idempotencyKey,
+    items: [{ menuItemId: 1, quantity: 2 }],
+    pickupMethod: 'asap',
+    pickupSlot: null,
+    instructions: '',
+  }
+}
+
+function provider(overrides = {}) {
+  let orderCount = 0
+  return {
+    name: 'razorpay',
+    async createProviderOrder({ amountPaise }) {
+      orderCount += 1
+      return {
+        amountPaise,
+        currency: 'INR',
+        orderId: `order_TestOrder${orderCount}`,
+        providerCode: 'created',
+        providerMessage: 'Created.',
+      }
+    },
+    buildSafeCheckoutConfiguration({ amountPaise, orderId }) {
+      return { amount: amountPaise, currency: 'INR', keyId: 'rzp_test_example', orderId }
+    },
+    verifyCheckoutResult: () => true,
+    async fetchPayment() {
+      return {
+        amountPaise: 14000,
+        captured: true,
+        currency: 'INR',
+        orderId: 'order_TestOrder1',
+        paymentId: 'pay_TestPayment1',
+        providerCode: 'captured',
+        providerMessage: 'Captured.',
+        status: 'paid',
+      }
+    },
+    async fetchProviderStatus() { return null },
+    ...overrides,
+  }
+}
+
+function capturedPayment(attempt, overrides = {}) {
+  return {
+    amountPaise: attempt.amountPaise,
+    captured: true,
+    currency: 'INR',
+    orderId: attempt.checkout.orderId,
+    paymentId: 'pay_ReservationGuard1',
+    providerCode: 'captured',
+    providerMessage: 'Captured.',
+    status: 'paid',
+    ...overrides,
+  }
+}
+
+test('trusted cart computes integer-paise totals and rejects tampering', () => {
+  assert.equal(buildTrustedCartSnapshot([{ menuItemId: 1, quantity: 2 }]).totalPaise, 14000)
+  assert.throws(() => buildTrustedCartSnapshot([{ menuItemId: 999, quantity: 1 }]))
+  assert.throws(() => buildTrustedCartSnapshot([{ menuItemId: 1, quantity: 0 }]))
+  assert.throws(() => buildTrustedCartSnapshot([{ menuItemId: 1, quantity: 1, price: 1 }]))
+})
+
+test('initiation is idempotent and conflicting reuse is rejected', async () => {
+  const database = createDatabase()
+  const gateway = provider()
+  const first = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
+  const second = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
+  assert.equal(first.attemptId, second.attemptId)
+  assert.equal(second.reused, true)
+  await assert.rejects(
+    initiatePayment(database, { ...payload(), items: [{ menuItemId: 2, quantity: 1 }] }, studentOneId, paymentConfig, gateway),
+    (error) => error.code === 'payment_idempotency_conflict',
+  )
+})
+
+test('captured verification creates exactly one order and repeated verification is idempotent', async () => {
+  const database = createDatabase()
+  const gateway = provider()
+  const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
+  const checkout = {
+    attemptId: attempt.attemptId,
+    razorpay_order_id: attempt.checkout.orderId,
+    razorpay_payment_id: 'pay_TestPayment1',
+    razorpay_signature: 'a'.repeat(64),
+  }
+  const paid = await verifyPayment(database, checkout, studentOneId, paymentConfig, gateway)
+  const repeated = await verifyPayment(database, checkout, studentOneId, paymentConfig, gateway)
+  assert.equal(paid.status, 'paid')
+  assert.equal(paid.order.id, repeated.order.id)
+  assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 1)
+  assert.deepEqual(database.prepare('SELECT status FROM stock_reservations').all().map(row => ({ ...row })),
+    [{ status: 'consumed' }])
+})
+
+test('captured fulfillment rejects missing, released, mismatched, or extra reservations atomically', async () => {
+  const corruptions = [
+    ['missing', (database) => database.prepare('DELETE FROM stock_reservations').run()],
+    ['released', (database) => database.prepare("UPDATE stock_reservations SET status = 'released'").run()],
+    ['quantity', (database) => database.prepare('UPDATE stock_reservations SET quantity = quantity + 1').run()],
+    ['menu-item', (database) => database.prepare('UPDATE stock_reservations SET menu_item_id = 2').run()],
+    ['extra', (database) => database.prepare(`INSERT INTO stock_reservations
+      (attempt_id, service_date, menu_item_id, quantity)
+      SELECT attempt_id, service_date, 2, 1 FROM stock_reservations LIMIT 1`).run()],
+  ]
+
+  for (const [name, corrupt] of corruptions) {
+    const database = createDatabase()
+    const attempt = await initiatePayment(database, payload(`guard-${name}`), studentOneId, paymentConfig, provider())
+    corrupt(database)
+    const gateway = provider({ async fetchProviderStatus() { return capturedPayment(attempt) } })
+
+    await assert.rejects(getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway), /reservations/)
+    assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 0)
+    assert.equal(database.prepare('SELECT status FROM payment_attempts').get().status, 'initiated')
+    assert.equal(database.prepare("SELECT count(*) AS count FROM stock_reservations WHERE status = 'consumed'").get().count, 0)
+  }
+})
+
+test('multi-item captured fulfillment validates and consumes every exact reservation once', async () => {
+  const database = createDatabase()
+  const multiItemPayload = {
+    ...payload('multi-item-guard'),
+    items: [{ menuItemId: 1, quantity: 2 }, { menuItemId: 2, quantity: 3 }],
+  }
+  const attempt = await initiatePayment(database, multiItemPayload, studentOneId, paymentConfig, provider())
+  const gateway = provider({ async fetchProviderStatus() { return capturedPayment(attempt) } })
+
+  const paid = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
+  const repeated = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
+  assert.equal(paid.status, 'paid')
+  assert.equal(repeated.order.id, paid.order.id)
+  assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 1)
+  assert.deepEqual(database.prepare(`SELECT menu_item_id AS menuItemId, quantity, status
+    FROM stock_reservations ORDER BY menu_item_id`).all().map(row => ({ ...row })), [
+    { menuItemId: 1, quantity: 2, status: 'consumed' },
+    { menuItemId: 2, quantity: 3, status: 'consumed' },
+  ])
+})
+
+test('reconciliation report identifies unresolved holds without releasing stock', async () => {
+  const database = createDatabase()
+  const gateway = provider()
+  const expired = await initiatePayment(database, payload('reconcile-expired'), studentOneId, paymentConfig, gateway)
+  await initiatePayment(database, payload('reconcile-active'), studentOneId, paymentConfig, gateway)
+  database.prepare("UPDATE payment_attempts SET status = 'expired' WHERE public_id = ?").run(expired.attemptId)
+
+  const report = listPaymentReconciliationHolds(database, new Date())
+  assert.equal(report.automaticReleaseEnabled, false)
+  assert.equal(report.holds.length, 1)
+  assert.equal(report.holds[0].attemptId, expired.attemptId)
+  assert.equal(report.holds[0].provider, 'razorpay')
+  assert.equal(report.holds[0].localStatus, 'expired')
+  assert.deepEqual(report.holds[0].reservations, [
+    { serviceDate: '2099-10-17', menuItemId: 1, quantity: 2 },
+  ])
+  assert.equal(database.prepare("SELECT count(*) AS count FROM stock_reservations WHERE status = 'held'").get().count, 2)
+})
+
+test('owner reconciliation route is read-only and owner-restricted', async () => {
+  const database = createDatabase()
+  const attempt = await initiatePayment(database, payload('reconcile-owner'), studentOneId, paymentConfig, provider())
+  database.prepare("UPDATE payment_attempts SET status = 'failed' WHERE public_id = ?").run(attempt.attemptId)
+  const ownerId = Number(database.prepare(`INSERT INTO users
+    (public_id, role, display_name, phone_number, phone_verified, status)
+    VALUES ('reconciliation-owner', 'OWNER', 'Owner', '+919000000003', 1, 'ACTIVE')`).run().lastInsertRowid)
+  const authConfig = { cookieName: 'reconciliation_session', cookieSecure: false,
+    sessionTtlHours: 1, sessionTouchMinutes: 15 }
+  const request = { method: 'GET', url: '/api/owner/payment-reconciliation',
+    headers: { 'user-agent': 'reconciliation-test' }, socket: { remoteAddress: '127.0.0.1' } }
+  const session = createSession(database, ownerId, request, authConfig)
+  request.headers.cookie = `${authConfig.cookieName}=${session.rawToken}`
+  let statusCode
+  let responseBody
+  const response = { writeHead(status) { statusCode = status }, end(body) { responseBody = body } }
+
+  assert.equal(await handlePaymentRoutes(request, response, new URL(`http://localhost${request.url}`),
+    database, authConfig, paymentConfig, provider()), true)
+  assert.equal(statusCode, 200)
+  const report = JSON.parse(responseBody)
+  assert.equal(report.automaticReleaseEnabled, false)
+  assert.equal(report.holds[0].attemptId, attempt.attemptId)
+  assert.equal(database.prepare('SELECT status FROM stock_reservations').get().status, 'held')
+
+  await assert.rejects(handlePaymentRoutes({ method: 'GET', url: request.url, headers: {}, socket: {} }, {},
+    new URL(`http://localhost${request.url}`), database, authConfig, paymentConfig, provider()),
+  { statusCode: 401, code: 'authentication_required' })
+})
+
+test('ownership and invalid signatures are rejected without creating orders', async () => {
+  const database = createDatabase()
+  const gateway = provider({ verifyCheckoutResult: () => false })
+  const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
+  const checkout = {
+    attemptId: attempt.attemptId,
+    razorpay_order_id: attempt.checkout.orderId,
+    razorpay_payment_id: 'pay_TestPayment1',
+    razorpay_signature: 'b'.repeat(64),
+  }
+  await assert.rejects(verifyPayment(database, checkout, studentTwoId, paymentConfig, gateway), (error) => error.statusCode === 404)
+  await assert.rejects(verifyPayment(database, checkout, studentOneId, paymentConfig, gateway), (error) => error.code === 'payment_signature_invalid')
+  assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 0)
+})
+
+test('pending recovery creates no order; captured recovery creates one', async () => {
+  const database = createDatabase()
+  let recoveredPayment = null
+  const gateway = provider({ async fetchProviderStatus() { return recoveredPayment } })
+  const attempt = await initiatePayment(database, payload(), studentOneId, paymentConfig, gateway)
+  const pending = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
+  assert.equal(pending.order, null)
+  recoveredPayment = {
+    amountPaise: 14000,
+    captured: true,
+    currency: 'INR',
+    orderId: attempt.checkout.orderId,
+    paymentId: 'pay_RecoveryPayment1',
+    providerCode: 'captured',
+    providerMessage: 'Captured.',
+    status: 'paid',
+  }
+  const paid = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
+  const repeated = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
+  assert.equal(paid.order.id, repeated.order.id)
+  assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 1)
+})
+
+test('mismatched amount, currency, or provider order never creates an order', async () => {
+  for (const mismatch of ['amount', 'currency', 'order']) {
+    const database = createDatabase()
+    const base = provider()
+    const attempt = await initiatePayment(database, payload(`request-${mismatch}`), studentOneId, paymentConfig, base)
+    const payment = {
+      amountPaise: mismatch === 'amount' ? 1 : 14000,
+      captured: true,
+      currency: mismatch === 'currency' ? 'USD' : 'INR',
+      orderId: mismatch === 'order' ? 'order_DifferentOrder1' : attempt.checkout.orderId,
+      paymentId: `pay_Mismatch${mismatch}1`,
+      providerCode: 'captured',
+      providerMessage: 'Captured.',
+      status: 'paid',
+    }
+    const gateway = { ...base, async fetchProviderStatus() { return payment } }
+    const result = await getPaymentStatus(database, attempt.attemptId, studentOneId, paymentConfig, gateway)
+    assert.equal(result.order, null)
+    assert.equal(result.status, 'failed')
+    assert.equal(database.prepare('SELECT count(*) AS count FROM orders').get().count, 0)
+    database.close()
+    databases.splice(databases.indexOf(database), 1)
+  }
+})
+
+test('Razorpay adapter verifies HMAC and normalizes captured payment safely', async () => {
+  const keySecret = 'x'.repeat(32)
+  const expectedOrderId = 'order_SyntheticOrder1'
+  const paymentId = 'pay_SyntheticPayment1'
+  const signature = createHmac('sha256', keySecret)
+    .update(`${expectedOrderId}|${paymentId}`)
+    .digest('hex')
+  const responseBody = JSON.stringify({
+    id: paymentId,
+    order_id: expectedOrderId,
+    amount: 14000,
+    currency: 'INR',
+    status: 'captured',
+    captured: true,
+  })
+  const razorpay = createRazorpayProvider({
+    enabled: true,
+    provider: 'razorpay',
+    razorpay: {
+      apiHost: 'https://api.razorpay.com',
+      keyId: 'rzp_test_synthetic',
+      keySecret,
+      requestTimeoutMilliseconds: 1000,
+    },
+  }, async () => new Response(responseBody, {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  }))
+  assert.equal(razorpay.verifyCheckoutResult({ expectedOrderId, paymentId, returnedOrderId: expectedOrderId, signature }), true)
+  assert.equal(razorpay.verifyCheckoutResult({ expectedOrderId, paymentId, returnedOrderId: expectedOrderId, signature: '0'.repeat(64) }), false)
+  const payment = await razorpay.fetchPayment(paymentId)
+  assert.equal(payment.status, 'paid')
+  assert.equal(payment.captured, true)
+  assert.equal(payment.amountPaise, 14000)
+})

@@ -1,0 +1,248 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useAuth } from '../auth/useAuth.js'
+import {
+  requestPhoneVerification,
+  verifyMsg91PhoneVerification,
+  verifyPhoneVerification,
+} from '../services/authApi.js'
+import {
+  isMsg91WidgetEnabled,
+  retryMsg91Otp,
+  sendMsg91Otp,
+  verifyMsg91Otp,
+} from '../services/msg91Widget.js'
+
+function maskPhoneNumber(phoneNumber) {
+  if (!phoneNumber) return 'your saved phone'
+  return `${phoneNumber.slice(0, 3)}******${phoneNumber.slice(-4)}`
+}
+
+function secondsUntil(timestamp, now) {
+  if (!timestamp) return 0
+  return Math.max(0, Math.ceil((new Date(timestamp).getTime() - now) / 1000))
+}
+
+export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoRequest = false, mandatory = false }) {
+  const { refreshSession, logout, isLoggingOut } = useAuth()
+  const [challenge, setChallenge] = useState(null)
+  const [code, setCode] = useState('')
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [isRequesting, setIsRequesting] = useState(false)
+  const [isVerifying, setIsVerifying] = useState(false)
+  const [verified, setVerified] = useState(Boolean(user.phoneVerified))
+  const [now, setNow] = useState(Date.now())
+  const challengeRef = useRef(null)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const resendSeconds = secondsUntil(challenge?.resendAvailableAt, now)
+  const expiresSeconds = secondsUntil(challenge?.expiresAt, now)
+  const maskedPhone = challenge?.maskedPhone || maskPhoneNumber(user.phoneNumber)
+  const codeIsValid = /^\d{6}$/.test(code)
+  const msg91Enabled = isMsg91WidgetEnabled()
+
+  const requestCode = useCallback(async () => {
+    setIsRequesting(true)
+    setError('')
+    setMessage('')
+
+    try {
+      let nextChallenge
+      if (msg91Enabled) {
+        if (challengeRef.current) await retryMsg91Otp()
+        else await sendMsg91Otp(user.phoneNumber)
+        nextChallenge = {
+          maskedPhone: maskPhoneNumber(user.phoneNumber),
+          provider: 'msg91',
+        }
+      } else {
+        nextChallenge = await requestPhoneVerification()
+      }
+      challengeRef.current = nextChallenge
+      setChallenge(nextChallenge)
+      setCode('')
+      setMessage(
+        nextChallenge.provider === 'meta-whatsapp'
+          ? 'Verification code sent to WhatsApp.'
+          : nextChallenge.provider === 'msg91'
+            ? 'Verification code sent securely.'
+          : 'Verification code requested securely.',
+      )
+      setNow(Date.now())
+    } catch (requestError) {
+      setError(requestError.message)
+      if (requestError.details?.resendAvailableAt) {
+        setChallenge((current) => ({
+          ...(current || {}),
+          maskedPhone: maskPhoneNumber(user.phoneNumber),
+          resendAvailableAt: requestError.details.resendAvailableAt,
+        }))
+      }
+    } finally {
+      setIsRequesting(false)
+    }
+  }, [msg91Enabled, user.phoneNumber])
+
+  useEffect(() => {
+    if (!autoRequest) return
+    // Cleanup prevents StrictMode's initial effect replay from sending twice.
+    const timer = window.setTimeout(() => { void requestCode() }, 0)
+    return () => window.clearTimeout(timer)
+  }, [autoRequest, requestCode])
+
+  async function handleLogout() {
+    try { await logout() } catch (requestError) { setError(requestError.message) }
+  }
+
+  async function verifyCode(event) {
+    event.preventDefault()
+    if (!codeIsValid || isVerifying) return
+
+    setIsVerifying(true)
+    setError('')
+    setMessage('')
+
+    try {
+      if (msg91Enabled) {
+        const accessToken = await verifyMsg91Otp(code)
+        await verifyMsg91PhoneVerification(accessToken)
+      } else {
+        await verifyPhoneVerification(code)
+      }
+      const refreshedUser = await refreshSession()
+      if (!refreshedUser?.phoneVerified) return
+      setVerified(true)
+      setCode('')
+      setMessage('Phone verified. You can now place new orders.')
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setIsVerifying(false)
+    }
+  }
+
+  function updateCode(event) {
+    setCode(event.target.value.replace(/\D/g, '').slice(0, 6))
+    if (error) setError('')
+  }
+
+  return (
+    <div className="phone-verification-overlay" role="presentation">
+      <section
+        aria-labelledby="phone-verification-title"
+        aria-modal="true"
+        className="phone-verification-dialog"
+        role="dialog"
+      >
+        <div className="phone-verification-heading">
+          <div>
+            <p className="eyebrow">Phone verification</p>
+            <h2 id="phone-verification-title">
+              {verified ? 'Phone verified.' : 'Verify your phone.'}
+            </h2>
+          </div>
+          {mandatory ? (
+            <button className="phone-verification-logout" disabled={isLoggingOut} onClick={handleLogout} type="button">
+              {isLoggingOut ? 'Signing out…' : 'Logout'}
+            </button>
+          ) : (
+            <button aria-label="Close phone verification" onClick={onClose} type="button">
+              ×
+            </button>
+          )}
+        </div>
+
+        {verified ? (
+          <div className="phone-verification-success" role="status">
+            <span aria-hidden="true">✓</span>
+            <strong>Verification complete</strong>
+            <p>{message || 'Your verified phone can now be used for ordering.'}</p>
+            <button className="primary-action" onClick={onClose} type="button">
+              Continue ordering
+            </button>
+          </div>
+        ) : (
+          <>
+            <p className="phone-verification-copy">
+              Send a one-time six-digit code to <strong>{maskedPhone}</strong>.
+              The code expires after five minutes.
+            </p>
+
+            {error && (
+              <div className="auth-feedback auth-feedback-error" role="alert">
+                {error}
+              </div>
+            )}
+            {message && (
+              <div className="auth-feedback auth-feedback-info" role="status">
+                {message}
+              </div>
+            )}
+
+            {msg91Enabled && <div id="msg91-captcha" />}
+
+            {!challenge ? (
+              <button
+                className="primary-action"
+                disabled={isRequesting}
+                onClick={requestCode}
+                type="button"
+              >
+                {isRequesting ? 'Requesting securely…' : 'Send verification code'}
+              </button>
+            ) : (
+              <form className="phone-verification-form" onSubmit={verifyCode}>
+                <label htmlFor="phone-verification-code">Six-digit code</label>
+                <input
+                  autoComplete="one-time-code"
+                  id="phone-verification-code"
+                  inputMode="numeric"
+                  maxLength={6}
+                  onChange={updateCode}
+                  pattern="[0-9]{6}"
+                  placeholder="000000"
+                  required
+                  type="text"
+                  value={code}
+                />
+                <div className="phone-verification-timing">
+                  <span>
+                    {expiresSeconds > 0
+                      ? `Expires in ${Math.ceil(expiresSeconds / 60)} min`
+                      : challenge.expiresAt ? 'Code expired' : 'Enter the code already sent to your phone'}
+                  </span>
+                  <button
+                    disabled={isRequesting || resendSeconds > 0}
+                    onClick={requestCode}
+                    type="button"
+                  >
+                    {resendSeconds > 0
+                      ? `Resend in ${resendSeconds}s`
+                      : isRequesting
+                        ? 'Requesting…'
+                        : 'Resend code'}
+                  </button>
+                </div>
+                <button
+                  className="primary-action"
+                  disabled={!codeIsValid || isVerifying}
+                  type="submit"
+                >
+                  {isVerifying ? 'Verifying securely…' : 'Verify phone'}
+                </button>
+              </form>
+            )}
+
+            <button className="phone-verification-edit" onClick={onEditPhone} type="button">
+              Edit phone number
+            </button>
+          </>
+        )}
+      </section>
+    </div>
+  )
+}

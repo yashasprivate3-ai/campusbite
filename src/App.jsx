@@ -1,5 +1,46 @@
-import { useEffect, useMemo, useState } from 'react'
+import { pickupWindows } from '../shared/pickupPolicy.js'
+import { BRAND } from '../shared/brand.js'
+import { sanitizeCart } from './utils/cartState.js'
+import { useMenuAvailability } from './hooks/useMenuAvailability.js'
+import { itemStatus } from '../shared/batchPolicy.js'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import { useAuth } from './auth/useAuth'
+import { AuthLoadingScreen } from './components/AuthLoadingScreen'
+import { BatchHistory } from './components/BatchHistory'
+import BatchTimer from './components/BatchTimer'
+import { CollapsiblePanel } from './components/CollapsiblePanel'
+import { KitchenActivityFeed } from './components/KitchenActivityFeed'
+import { LiveKitchenDashboard } from './components/KitchenMetrics'
+import { KitchenStatistics } from './components/KitchenStatistics'
+import { LoginScreen } from './components/LoginScreen'
+import { OrderTracking } from './components/OrderTracking'
+import { OrderTrackingState } from './components/OrderTrackingState'
+import { OwnerWorkspace } from './components/OwnerWorkspace'
+import { registrationStep } from './auth/registrationStep.js'
+import { PhoneOnboardingScreen } from './components/PhoneOnboardingScreen'
+import { PhoneVerificationDialog } from './components/PhoneVerificationDialog'
+import { SessionControls } from './components/SessionControls'
+import { useKitchenOrders } from './hooks/useKitchenOrders'
+import { useTrackedOrder } from './hooks/useTrackedOrder'
+import {
+  getPaymentStatus,
+  initiatePayment,
+  verifyPayment,
+} from './services/paymentsApi'
+import { openPaymentCheckout } from './services/paymentCheckout'
+import { serviceStatus } from './services/serviceStatus'
+import {
+  buildKitchenActivity,
+  completeBatchRecord,
+  createBatchSnapshot,
+  findActiveBatchRecord,
+  getBatchPriorities,
+  getBatchStartedAt,
+  getKitchenMetrics,
+  getProductionSummaryBatches,
+  startBatchRecord,
+} from './utils/kitchenIntelligence'
 
 const menuItems = [
   { id: 1, name: 'Veg Fried Rice', description: 'Wok-tossed rice with fresh vegetables and house seasoning.', price: 70, category: 'Meals', emoji: '🍚', time: '8-10 min', popular: true },
@@ -11,40 +52,571 @@ const menuItems = [
 ]
 
 const categories = ['All', 'Ready now', 'Meals', 'Snacks', 'Beverages']
-const pickupSlots = ['12:00 PM - 12:15 PM', '12:15 PM - 12:30 PM', '12:30 PM - 12:45 PM', '1:00 PM - 1:15 PM']
 
-function createOrderToken() {
-  return `CB-${crypto.randomUUID().slice(0, 4).toUpperCase()}`
+const KITCHEN_BATCHES_KEY = 'campusbite-kitchen-batches'
+const STUDENT_CART_KEY_PREFIX = 'campusbite-student-cart'
+const TRACKED_ORDER_ID_KEY_PREFIX = 'campusbite-tracked-order-id'
+const PAYMENT_ATTEMPT_ID_KEY_PREFIX = 'campusbite-payment-attempt-id'
+
+function loadKitchenBatches() {
+  try {
+    const storedBatches =
+      JSON.parse(localStorage.getItem(KITCHEN_BATCHES_KEY)) || []
+
+    return storedBatches.map((batch) => ({
+      ...batch,
+      startedAt: normalizeStoredTimestamp(batch.startedAt),
+      completedAt: normalizeStoredTimestamp(batch.completedAt),
+    }))
+  } catch {
+    return []
+  }
 }
 
-const kitchenStatuses = ['new', 'preparing', 'ready']
-const statusLabels = { new: 'New', preparing: 'Preparing', ready: 'Ready' }
-function loadKitchenOrders() { try { return JSON.parse(localStorage.getItem('campusbite-kitchen-orders')) || [] } catch { return [] } }
-
-function KitchenDashboard({ orders, onStatusChange }) {
-  const summary = useMemo(() => { const result = new Map(); orders.filter(o => o.status !== 'ready').forEach(o => o.items.forEach(i => result.set(i.name, (result.get(i.name) || 0) + i.quantity))); return [...result.entries()].sort((a,b) => b[1]-a[1]) }, [orders])
-  return <main className="kitchen-main"><section className="kitchen-hero"><div><p className="eyebrow">Live operations</p><h1>Kitchen queue</h1><p>Prepare in order, then move each ticket as it progresses.</p></div><div className="kitchen-live"><span className="status-dot" />Live <strong>{orders.filter(o => o.status !== 'ready').length}</strong> active</div></section><section className="prep-summary"><div className="kitchen-section-heading"><div><p className="eyebrow">Across active tickets</p><h2>Preparation summary</h2></div><span>Ready orders excluded</span></div>{summary.length ? <div className="prep-grid">{summary.map(([name, quantity]) => <div className="prep-item" key={name}><strong>{quantity}</strong><span>{name}</span></div>)}</div> : <p className="kitchen-empty">Nothing to prepare right now.</p>}</section><section className="kitchen-board">{kitchenStatuses.map(status => { const list=orders.filter(o=>o.status===status); return <div className={'order-column '+status} key={status}><div className="column-heading"><h2>{statusLabels[status]}</h2><span>{list.length}</span></div><div className="ticket-list">{!list.length && <p className="column-empty">No {statusLabels[status].toLowerCase()} orders</p>}{list.map(order => <article className="order-ticket" key={order.token}><div className="ticket-top"><strong>{order.token}</strong><time>{new Date(order.createdAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time></div><ul>{order.items.map(i=><li key={i.id}><strong>{i.quantity}?</strong> {i.name}</li>)}</ul><div className="ticket-meta"><span>{order.pickupMethod==='scheduled'?order.pickupSlot:'ASAP pickup'}</span><span>{order.source}</span></div>{order.instructions&&<p className="ticket-note"><strong>Note:</strong> {order.instructions}</p>}<div className="ticket-actions">{status==='new'&&<button onClick={()=>onStatusChange(order.token,'preparing')}>Start preparing</button>}{status==='preparing'&&<><button className="secondary" onClick={()=>onStatusChange(order.token,'new')}>Move back</button><button onClick={()=>onStatusChange(order.token,'ready')}>Mark ready</button></>}{status==='ready'&&<button className="secondary" onClick={()=>onStatusChange(order.token,'preparing')}>Reopen order</button>}</div></article>)}</div></div>})}</section></main>
+function normalizeStoredTimestamp(timestamp) {
+  if (!timestamp || timestamp.includes('T')) return timestamp
+  return `${timestamp.replace(' ', 'T')}Z`
 }
 
-function App() {
+function getStudentStorageKey(prefix, publicId) {
+  return `${prefix}:${publicId}`
+}
+
+function loadStudentCart(publicId) {
+  try {
+    return sanitizeCart(JSON.parse(localStorage.getItem(getStudentStorageKey(STUDENT_CART_KEY_PREFIX, publicId))), menuItems.map(item => item.id))
+  } catch { return {} }
+}
+
+function loadTrackedOrderId(publicId) {
+  const storedOrderId = Number(
+    localStorage.getItem(
+      getStudentStorageKey(TRACKED_ORDER_ID_KEY_PREFIX, publicId),
+    ),
+  )
+  return Number.isSafeInteger(storedOrderId) && storedOrderId > 0
+    ? storedOrderId
+    : null
+}
+
+function loadPaymentAttemptId(publicId) {
+  try {
+    return localStorage.getItem(
+      getStudentStorageKey(PAYMENT_ATTEMPT_ID_KEY_PREFIX, publicId),
+    )
+  } catch {
+    return null
+  }
+}
+
+const KITCHEN_QUEUE_STATUSES = ['new', 'preparing', 'ready']
+
+function KitchenDashboard({
+  batchRecords,
+  error,
+  isBusy,
+  isLoading,
+  orders,
+  onCompleteBatch,
+  onRetry,
+  onStartBatch,
+  onStatusChange,
+  pendingOrderIds,
+}) {
+
+  const { activeBatches } = useMemo(
+    () => getProductionSummaryBatches(orders, batchRecords),
+    [orders, batchRecords],
+  )
+  const metrics = useMemo(
+    () => getKitchenMetrics(orders, batchRecords),
+    [orders, batchRecords],
+  )
+  const priorities = useMemo(
+    () => getBatchPriorities(activeBatches, orders),
+    [activeBatches, orders],
+  )
+  const activities = useMemo(
+    () => buildKitchenActivity(orders, batchRecords),
+    [orders, batchRecords],
+  )
+  const activeOrders = orders.filter((order) => order.status !== 'ready')
+  const completedBatchCount = batchRecords.filter(
+    (batch) => batch.status === 'completed',
+  ).length
+  const ordersByStatus = useMemo(
+    () =>
+      Object.fromEntries(
+        KITCHEN_QUEUE_STATUSES.map((status) => [
+          status,
+          orders.filter((order) => order.status === status),
+        ]),
+      ),
+    [orders],
+  )
+
+  return (
+    <main className="kitchen-main">
+
+      <section className="kitchen-hero">
+        <div>
+          <p className="eyebrow">Sprint 4 · Live operations</p>
+          <h1>Kitchen Queue</h1>
+          <p>Prepare orders and update progress.</p>
+        </div>
+
+        <div className="kitchen-live">
+          <span className="live-dot" aria-hidden="true" /> Live
+          <span aria-hidden="true">•</span>
+          <strong>{activeOrders.length}</strong> active orders
+        </div>
+      </section>
+
+      {error && (
+        <div className="api-state api-state-error" role="alert">
+          <div>
+            <strong>Kitchen service needs attention</strong>
+            <span>{error}</span>
+          </div>
+          <button type="button" onClick={onRetry}>Retry</button>
+        </div>
+      )}
+
+      {isLoading && orders.length === 0 && (
+        <div className="api-state" role="status">
+          <strong>Loading kitchen orders…</strong>
+          <span>Connecting to the shared {BRAND.name} order queue.</span>
+        </div>
+      )}
+
+      <LiveKitchenDashboard metrics={metrics} />
+
+<section className="prep-summary">
+  <h2>Production Batch Summary</h2>
+  <div className="prep-grid">
+    {activeBatches.map((batch) => {
+      const linkedOrders = batch.linkedOrders
+        .map((token) => orders.find((order) => order.token === token))
+        .filter(Boolean)
+      const isPreparing = linkedOrders.some(
+        (order) => itemStatus(order, batch.itemName) === 'preparing',
+      )
+      const activeRecord = findActiveBatchRecord(batch, batchRecords)
+      const startedAt = getBatchStartedAt(batch, linkedOrders, batchRecords)
+      const priority = priorities[batch.batchKey]
+      const isPriority =
+        priority?.highVolume || priority?.longestWait
+
+      return (
+        <article
+          className={`prep-item${isPriority ? ' priority-batch' : ''}`}
+          key={batch.summaryKey}
+        >
+          <strong>{batch.requiredQuantity}</strong>
+          <span>{batch.itemName}</span>
+          <small>{batch.linkedOrders.length} orders linked</small>
+          <small>{batch.pickupSlot || 'ASAP pickup'}{batch.instructions ? ' · ' + batch.instructions : ''}</small>
+
+          <div
+            className={`batch-status ${isPreparing ? 'preparing' : 'ready-to-start'}`}
+          >
+            {isPreparing ? 'Preparing' : 'Ready to Start'}
+          </div>
+
+          {isPriority && (
+            <div className="priority-indicators" aria-label="Batch priority">
+              {priority.highVolume && <span>Highest volume</span>}
+              {priority.longestWait && <span>Longest wait</span>}
+            </div>
+          )}
+
+          {isPreparing && startedAt && (
+            <BatchTimer
+              key={activeRecord?.id || startedAt}
+              startedAt={startedAt}
+            />
+          )}
+
+          {isPreparing ? (
+            <div className="batch-progress-actions">
+              <button className="secondary" type="button" disabled>
+                Order In Progress
+              </button>
+              <button
+                className="primary-action"
+                type="button"
+                onClick={() => onCompleteBatch(batch)}
+                disabled={isBusy}
+              >
+                {isBusy ? 'Updating…' : 'Complete Batch'}
+              </button>
+            </div>
+          ) : (
+            <button
+              className="primary-action"
+              type="button"
+              onClick={() => onStartBatch(batch)}
+              disabled={isBusy}
+            >
+              {isBusy ? 'Updating…' : 'Start Batch Preparation'}
+            </button>
+          )}
+        </article>
+      )
+    })}
+
+    {activeBatches.length === 0 && (
+      <p className="prep-empty-state">No active production batches.</p>
+    )}
+  </div>
+</section>
+      <section className="kitchen-board" aria-label="Kitchen order queues">
+        {KITCHEN_QUEUE_STATUSES.map((status) => {
+          const statusOrders = ordersByStatus[status]
+          const queueTitleId = `queue-${status}-title`
+
+          return (
+            <section
+              className="order-column"
+              key={status}
+              aria-labelledby={queueTitleId}
+            >
+              <header className="queue-column-header">
+                <h2 id={queueTitleId}>{status.toUpperCase()}</h2>
+                <span>
+                  {statusOrders.length}{' '}
+                  {statusOrders.length === 1 ? 'Order' : 'Orders'}
+                </span>
+              </header>
+
+              <div
+                className="queue-scroll-region"
+                tabIndex={statusOrders.length > 0 ? 0 : undefined}
+                aria-label={`${status.toUpperCase()} orders`}
+              >
+                <div className="ticket-list">
+                  {statusOrders.map((order) => (
+                    <article className="order-ticket" key={order.token}>
+                      <h3>{order.token}</h3>
+
+                      {order.items.map((item) => (
+                        <p key={item.id}>
+                          {item.quantity} × {item.name}
+                        </p>
+                      ))}
+
+                      <small>
+                        {order.pickupMethod === 'scheduled'
+                          ? order.pickupSlot
+                          : 'ASAP pickup'}
+                      </small>
+
+                      {order.instructions && (
+                        <p>Note: {order.instructions}</p>
+                      )}
+
+                      {status === 'new' && (
+                        <button
+                          onClick={() =>
+                            onStatusChange(order.id, 'preparing')
+                          }
+                          disabled={pendingOrderIds.includes(order.id)}
+                        >
+                          {pendingOrderIds.includes(order.id)
+                            ? 'Updating…'
+                            : 'Start preparing'}
+                        </button>
+                      )}
+
+                      {status === 'preparing' && (
+                        <button
+                          onClick={() => onStatusChange(order.id, 'ready')}
+                          disabled={pendingOrderIds.includes(order.id)}
+                        >
+                          {pendingOrderIds.includes(order.id)
+                            ? 'Updating…'
+                            : 'Mark ready'}
+                        </button>
+                      )}
+                    </article>
+                  ))}
+
+                  {statusOrders.length === 0 && (
+                    <p className="column-empty">No {status} orders.</p>
+                  )}
+                </div>
+              </div>
+            </section>
+          )
+        })}
+      </section>
+
+      <div className="kitchen-collapsible-stack">
+        <CollapsiblePanel
+          id="kitchen-statistics"
+          title="Kitchen Statistics"
+          summary="Live operational summary"
+        >
+          <KitchenStatistics metrics={metrics} />
+        </CollapsiblePanel>
+
+        <CollapsiblePanel
+          id="kitchen-activity"
+          title="Activity Feed"
+          summary={`${activities.length} recent events`}
+        >
+          <KitchenActivityFeed activities={activities} />
+        </CollapsiblePanel>
+
+        <CollapsiblePanel
+          id="batch-history"
+          title="Batch History"
+          summary={`${completedBatchCount} completed`}
+        >
+          <BatchHistory batches={batchRecords} />
+        </CollapsiblePanel>
+      </div>
+
+    </main>
+  )
+}
+function getDefaultView(role) {
+  if (role === 'OWNER') return 'owner'
+  if (role === 'KITCHEN') return 'kitchen'
+  return 'student'
+}
+
+function CampusBiteWorkspace({ onEditPhone, user }) {
+  const { error: authError, isLoggingOut, logout } = useAuth()
+  const canUseKitchen = user.role === 'OWNER' || user.role === 'KITCHEN'
   const [activeCategory, setActiveCategory] = useState('All')
-  const [cart, setCart] = useState({})
+  const [cart, setCart] = useState(() =>
+    user.role === 'STUDENT' ? loadStudentCart(user.publicId) : {},
+  )
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [checkoutStep, setCheckoutStep] = useState(null)
   const [pickupMethod, setPickupMethod] = useState('asap')
-  const [pickupSlot, setPickupSlot] = useState(pickupSlots[0])
+  const [pickupSlot, setPickupSlot] = useState(() => pickupWindows().find(slot => slot.eligible)?.value || '')
+  const [menuIntent, setMenuIntent] = useState('now')
   const [instructions, setInstructions] = useState('')
+  const liveMenu = useMenuAvailability(user.role === 'STUDENT', pickupMethod, pickupSlot)
+  const pickupSlots = (liveMenu?.menu?.slots || pickupWindows()).filter(slot => slot.eligible).map(slot => slot.value)
+  const nextBreak = (liveMenu?.menu?.slots || pickupWindows()).find(slot => new Date(slot.value.slice(0, 10) + 'T' + String(Math.floor(slot.start / 60)).padStart(2, '0') + ':' + String(slot.start % 60).padStart(2, '0') + ':00+05:30') > new Date())
+  function chooseMenuIntent(intent) {
+    setMenuIntent(intent)
+    setPickupMethod(intent === 'now' ? 'asap' : 'scheduled')
+    if (intent !== 'now') setPickupSlot(intent === 'break' ? nextBreak?.value || '' : pickupSlots[0] || '')
+  }
   const [confirmedOrder, setConfirmedOrder] = useState(null)
-  const [activeView, setActiveView] = useState('student')
-  const [kitchenOrders, setKitchenOrders] = useState(loadKitchenOrders)
-  useEffect(() => localStorage.setItem('campusbite-kitchen-orders', JSON.stringify(kitchenOrders)), [kitchenOrders])
-  const visibleItems = activeCategory === 'All' ? menuItems : menuItems.filter((item) => item.category === activeCategory)
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false)
+  const [orderSubmitError, setOrderSubmitError] = useState('')
+  const [paymentMessage, setPaymentMessage] = useState('')
+  const [paymentStatus, setPaymentStatus] = useState(null)
+  const [trustedPaymentTotal, setTrustedPaymentTotal] = useState(null)
+  const [isPhoneVerificationOpen, setIsPhoneVerificationOpen] = useState(false)
+  const [activeView, setActiveView] = useState(() =>
+    getDefaultView(user.role),
+  )
+  const [kitchenBatches, setKitchenBatches] = useState(() =>
+    canUseKitchen ? loadKitchenBatches() : [],
+  )
+  const [trackedOrderId, setTrackedOrderId] = useState(() =>
+    user.role === 'STUDENT' ? loadTrackedOrderId(user.publicId) : null,
+  )
+  // Bumped by the header Track order button so it always brings the tracking
+  // heading back into view, even when the tracking view is already open.
+  const [trackingFocusRequest, setTrackingFocusRequest] = useState(0)
+  const [studentView, setStudentView] = useState(() =>
+    user.role === 'STUDENT' && loadTrackedOrderId(user.publicId)
+      ? 'tracking'
+      : 'menu',
+  )
+  const [pendingPaymentAttemptId, setPendingPaymentAttemptId] = useState(() =>
+    user.role === 'STUDENT' ? loadPaymentAttemptId(user.publicId) : null,
+  )
+  const checkoutRequestId = useRef(null)
+  const paymentConfirmationRequest = useRef(null)
+  const checkoutSignature = JSON.stringify({
+    cart,
+    instructions: instructions.trim(),
+    pickupMethod,
+    pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
+  })
+  const checkoutSignatureRef = useRef(checkoutSignature)
+  const joiningOrderIds = useRef(new Set())
+  const {
+    error: kitchenError,
+    isLoading: isKitchenLoading,
+    orders: kitchenOrders,
+    pendingOrderIds,
+    refreshOrders,
+    updateOrderStatus: updateKitchenOrderStatus,
+  } = useKitchenOrders(canUseKitchen)
+  const {
+    error: trackingError,
+    isLoading: isTrackingLoading,
+    order: trackedOrder,
+    refreshOrder: refreshTrackedOrder,
+    setOrder: setTrackedOrder,
+  } = useTrackedOrder(
+    trackedOrderId,
+    user.role === 'STUDENT' &&
+      activeView === 'student' &&
+      studentView === 'tracking',
+  )
+
+  useEffect(() => {
+    window.scrollTo(0, 0)
+  }, [activeView, studentView, trackingFocusRequest])
+
+  useEffect(() => {
+    if (canUseKitchen) {
+      localStorage.setItem(KITCHEN_BATCHES_KEY, JSON.stringify(kitchenBatches))
+    }
+  }, [canUseKitchen, kitchenBatches])
+
+  useEffect(() => {
+    if (user.role === 'STUDENT') {
+      localStorage.setItem(
+        getStudentStorageKey(STUDENT_CART_KEY_PREFIX, user.publicId),
+        JSON.stringify(cart),
+      )
+    }
+  }, [cart, user.publicId, user.role])
+
+  useEffect(() => {
+    if (trackedOrderId) {
+      localStorage.setItem(
+        getStudentStorageKey(TRACKED_ORDER_ID_KEY_PREFIX, user.publicId),
+        String(trackedOrderId),
+      )
+    }
+  }, [trackedOrderId, user.publicId])
+
+  useEffect(() => {
+    if (user.role !== 'STUDENT') return
+    const storageKey = getStudentStorageKey(
+      PAYMENT_ATTEMPT_ID_KEY_PREFIX,
+      user.publicId,
+    )
+    if (pendingPaymentAttemptId) {
+      localStorage.setItem(storageKey, pendingPaymentAttemptId)
+    } else {
+      localStorage.removeItem(storageKey)
+    }
+  }, [pendingPaymentAttemptId, user.publicId, user.role])
+
+  useEffect(() => {
+    if (user.role !== 'STUDENT' || !pendingPaymentAttemptId) return
+    const controller = new AbortController()
+
+    getPaymentStatus(pendingPaymentAttemptId, { signal: controller.signal })
+      .then((attempt) => {
+        setPaymentStatus(attempt.status)
+        setTrustedPaymentTotal(attempt.amount)
+        if (attempt.status === 'paid' && attempt.order) {
+          setConfirmedOrder(attempt.order)
+          setTrackedOrderId(attempt.order.id)
+          setTrackedOrder(attempt.order)
+          setCart({})
+          setCheckoutStep(null)
+          setStudentView('tracking')
+          setPendingPaymentAttemptId(null)
+          setPaymentMessage('Payment confirmed. Your order is now in the Kitchen queue.')
+          return
+        }
+
+        if (attempt.status === 'pending' || attempt.status === 'initiated') {
+          setPaymentMessage(
+            'The payment provider has not confirmed this payment yet. No Kitchen order has been created.',
+          )
+        } else {
+          setPaymentMessage(
+            'The previous payment did not complete. Your cart is still available.',
+          )
+          setPendingPaymentAttemptId(null)
+          checkoutRequestId.current = null
+        }
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') setPaymentMessage(error.message)
+      })
+
+    return () => controller.abort()
+  }, [pendingPaymentAttemptId, setTrackedOrder, user.publicId, user.role])
+
+  useEffect(() => {
+    if (user.role !== 'STUDENT') return
+
+    if (
+      checkoutSignatureRef.current !== checkoutSignature &&
+      !isSubmittingOrder
+    ) {
+      checkoutSignatureRef.current = checkoutSignature
+      checkoutRequestId.current = null
+      setOrderSubmitError('')
+    }
+  }, [checkoutSignature, isSubmittingOrder, user.role])
+
+  useEffect(() => {
+    const activeBatchRecords = kitchenBatches.filter(
+      (batch) => batch.status === 'preparing',
+    )
+
+    kitchenOrders
+      .filter((order) => order.status === 'new')
+      .forEach((order) => {
+        const matchingRecord = activeBatchRecords.find((batch) =>
+          order.items.some((item) => item.name === batch.itemName),
+        )
+
+        if (!matchingRecord || joiningOrderIds.current.has(order.id)) return
+
+        joiningOrderIds.current.add(order.id)
+        updateKitchenOrderStatus(order.id, 'preparing', {
+          batchItem: matchingRecord.itemName,
+        })
+          .then(() => {
+            setKitchenBatches((records) =>
+              records.map((record) => {
+                if (
+                  record.id !== matchingRecord.id ||
+                  record.linkedOrders.includes(order.token)
+                ) {
+                  return record
+                }
+
+                const addedQuantity = order.items
+                  .filter((item) => item.name === record.itemName)
+                  .reduce((total, item) => total + item.quantity, 0)
+
+                return {
+                  ...record,
+                  linkedOrders: [...record.linkedOrders, order.token],
+                  requiredQuantity: record.requiredQuantity + addedQuantity,
+                }
+              }),
+            )
+          })
+          .catch(() => {
+            // The shared kitchen error banner provides the retry path.
+          })
+          .finally(() => joiningOrderIds.current.delete(order.id))
+      })
+  }, [canUseKitchen, kitchenBatches, kitchenOrders, updateKitchenOrderStatus])
+
+  const menuWithAvailability = menuItems.map(item => ({ ...item, live: liveMenu?.menu?.items.find(candidate => candidate.id === item.id) }))
+  const homeStatus = serviceStatus(liveMenu, menuWithAvailability)
+  // Only an explicit server answer switches checkout off; payment is still verified server-side either way.
+  const paymentsOff = liveMenu?.menu?.paymentsEnabled === false
+  const visibleItems = menuWithAvailability.filter(item => activeCategory === 'All' || (activeCategory === 'Ready now' ? item.live?.preparationMinutes === 0 : item.category === activeCategory))
   const cartItems = menuItems.filter((item) => cart[item.id])
   const cartCount = cartItems.reduce((total, item) => total + cart[item.id], 0)
   const cartTotal = cartItems.reduce((total, item) => total + item.price * cart[item.id], 0)
-
   function addItem(itemId) {
-    setCart((currentCart) => ({ ...currentCart, [itemId]: (currentCart[itemId] || 0) + 1 }))
+    const live = menuWithAvailability.find(item => item.id === itemId)?.live
+    if (!live?.available) return
+    setCart((currentCart) => ({ ...currentCart, [itemId]: Math.min(20, live.remaining, (currentCart[itemId] || 0) + 1) }))
   }
 
   function removeItem(itemId) {
@@ -56,75 +628,427 @@ function App() {
       return nextCart
     })
   }
-
   function clearCart() {
     if (window.confirm('Remove every item from your cart?')) setCart({})
   }
 
   function openCheckout() {
     setIsCartOpen(false)
+    setOrderSubmitError('')
+    setPaymentMessage('')
+    setPaymentStatus(null)
+    setTrustedPaymentTotal(null)
+    checkoutRequestId.current = null
+    checkoutSignatureRef.current = checkoutSignature
     setCheckoutStep('details')
   }
 
-  function confirmOrder() {
-    const token = createOrderToken()
-    const createdAt = new Date().toISOString()
-    const confirmed = {
-      token,
-      items: cartItems.map((item) => ({ ...item, quantity: cart[item.id] })),
-      total: cartTotal,
-      pickupMethod,
-      pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
-      instructions: instructions.trim(), source: 'Student app', createdAt, status: 'new',
-      statusHistory: [{ status: 'new', at: createdAt }],
-    }
-    setConfirmedOrder(confirmed)
-    setKitchenOrders((orders) => [...orders, confirmed])
+  function applyConfirmedPayment(attempt) {
+    setConfirmedOrder(attempt.order)
+    setTrackedOrderId(attempt.order.id)
+    setTrackedOrder(attempt.order)
     setCart({})
-    setCheckoutStep('confirmation')
+    setCheckoutStep(null)
+    setStudentView('tracking')
+    setPendingPaymentAttemptId(null)
+    setPaymentStatus('paid')
+    setPaymentMessage('Payment confirmed. Your order is now in the Kitchen queue.')
+    checkoutRequestId.current = null
+    setPickupMethod('asap')
+    setPickupSlot(pickupSlots[0] || '')
+    setInstructions('')
   }
 
-  function updateOrderStatus(token, status) {
-    const at = new Date().toISOString()
-    setKitchenOrders(orders => orders.map(order => order.token === token ? { ...order, status, statusHistory: [...order.statusHistory, { status, at }] } : order))
+  async function verifyPaymentWithBackend(attemptId, checkoutResult = null) {
+    if (paymentConfirmationRequest.current) {
+      return paymentConfirmationRequest.current
+    }
+
+    const request = checkoutResult
+      ? verifyPayment({ attemptId, ...checkoutResult })
+      : getPaymentStatus(attemptId)
+    paymentConfirmationRequest.current = request
+    setPaymentStatus('checking')
+    setPaymentMessage(`${BRAND.name} is verifying the payment with the payment provider…`)
+
+    try {
+      const attempt = await request
+      setPaymentStatus(attempt.status)
+      setTrustedPaymentTotal(attempt.amount)
+
+      if (attempt.status === 'paid' && attempt.order) {
+        applyConfirmedPayment(attempt)
+      } else if (attempt.status === 'pending' || attempt.status === 'initiated') {
+        setPaymentMessage(
+          attempt.responseMessage || 'Payment is still pending. No Kitchen order has been created yet.',
+        )
+      } else {
+        setPaymentMessage(
+          attempt.responseMessage ||
+            'Payment was not successful. No Kitchen order was created.',
+        )
+        setPendingPaymentAttemptId(null)
+        checkoutRequestId.current = null
+      }
+
+      return attempt
+    } catch (error) {
+      setOrderSubmitError(error.message)
+      setPaymentMessage(
+        'Payment could not be verified. Check its status before trying another payment.',
+      )
+      throw error
+    } finally {
+      paymentConfirmationRequest.current = null
+    }
   }
 
+  async function confirmOrder() {
+    if (isSubmittingOrder || cartItems.length === 0 || paymentsOff) return
+
+    if (user.role === 'STUDENT' && !user.phoneVerified) {
+      setCheckoutStep(null)
+      setIsPhoneVerificationOpen(true)
+      return
+    }
+
+    const requestId = checkoutRequestId.current || crypto.randomUUID()
+    checkoutRequestId.current = requestId
+    setIsSubmittingOrder(true)
+    setOrderSubmitError('')
+
+    try {
+      const attempt = await initiatePayment({
+        idempotencyKey: requestId,
+        items: cartItems.map((item) => ({
+          menuItemId: item.id,
+          quantity: cart[item.id],
+        })),
+        pickupMethod,
+        pickupSlot: pickupMethod === 'scheduled' ? pickupSlot : null,
+        instructions: instructions.trim(),
+      })
+      setPendingPaymentAttemptId(attempt.attemptId)
+      setTrustedPaymentTotal(attempt.amount)
+      setPaymentStatus(attempt.status)
+
+      if (attempt.status === 'paid' && attempt.order) {
+        applyConfirmedPayment(attempt)
+        return
+      }
+
+      if (!attempt.checkout) {
+        setPaymentMessage(
+          'This payment is awaiting a payment status check. No Kitchen order has been created.',
+        )
+        return
+      }
+
+      setPaymentMessage(`${BRAND.name} verified the total as ₹${attempt.amount}.`)
+      setPaymentStatus('checkout-open')
+      await openPaymentCheckout(attempt.checkout, {
+        onSuccess: (checkoutResult) => {
+          verifyPaymentWithBackend(attempt.attemptId, checkoutResult).catch(() => {})
+        },
+        onDismiss: () => {
+          verifyPaymentWithBackend(attempt.attemptId)
+            .then((checkedAttempt) => {
+              if (['pending', 'initiated'].includes(checkedAttempt.status)) {
+                setPaymentMessage(
+                  'Checkout was closed. Payment is unconfirmed, so no Kitchen order was created.',
+                )
+              }
+            })
+            .catch(() => {})
+        },
+        onFailure: (failure) => {
+          setPaymentStatus('failed')
+          setPaymentMessage(
+            failure.description || 'Payment failed. Your cart is still available.',
+          )
+        },
+      })
+    } catch (error) {
+      setOrderSubmitError(error.message)
+      if (error.code === 'phone_verification_required') {
+        setCheckoutStep(null)
+        setIsPhoneVerificationOpen(true)
+      }
+      if (error.code === 'payment_attempt_terminal') {
+        setPendingPaymentAttemptId(null)
+        checkoutRequestId.current = null
+      }
+    } finally {
+      setIsSubmittingOrder(false)
+    }
+  }
+
+  async function updateOrderStatus(orderId, status) {
+    try {
+      await updateKitchenOrderStatus(orderId, status)
+    } catch {
+      // The kitchen error banner keeps the failed server state visible.
+    }
+  }
+
+  async function startBatch(batch) {
+    const batchSnapshot = createBatchSnapshot(batch, kitchenOrders, 'new')
+    const linkedOrders = kitchenOrders.filter(
+      (order) =>
+        batchSnapshot.linkedOrders.includes(order.token),
+    )
+
+    if (linkedOrders.length === 0) return
+
+    const results = await Promise.allSettled(
+      linkedOrders.map((order) =>
+        updateKitchenOrderStatus(order.id, 'preparing', {
+          batchItem: batch.itemName,
+        }),
+      ),
+    )
+    const updatedOrders = results
+      .filter((result) => result.status === 'fulfilled')
+      .map((result) => result.value)
+
+    if (updatedOrders.length > 0) {
+      const startedAt =
+        updatedOrders[0].statusHistory.at(-1)?.at || new Date().toISOString()
+      setKitchenBatches((records) =>
+        startBatchRecord(records, createBatchSnapshot(batch, updatedOrders, 'preparing'), startedAt),
+      )
+    }
+
+    if (results.some((result) => result.status === 'rejected')) {
+      await refreshOrders({ silent: true })
+    }
+  }
+
+  async function completeBatch(batch) {
+    const batchSnapshot = createBatchSnapshot(
+      batch,
+      kitchenOrders,
+      'preparing',
+    )
+    const linkedOrders = kitchenOrders.filter(
+      (order) =>
+        batchSnapshot.linkedOrders.includes(order.token),
+    )
+
+    if (linkedOrders.length === 0) return
+
+    const results = await Promise.allSettled(
+      linkedOrders.map((order) =>
+        updateKitchenOrderStatus(order.id, 'ready', {
+          batchItem: batch.itemName,
+        }),
+      ),
+    )
+
+    if (results.every((result) => result.status === 'fulfilled')) {
+      const completedAt =
+        results[0].value.statusHistory.at(-1)?.at || new Date().toISOString()
+      setKitchenBatches((records) =>
+        completeBatchRecord(records, batchSnapshot, completedAt),
+      )
+    } else {
+      await refreshOrders({ silent: true })
+    }
+  }
   function finishOrder() {
     setCheckoutStep(null)
     setConfirmedOrder(null)
+    setStudentView('menu')
     setPickupMethod('asap')
-    setPickupSlot(pickupSlots[0])
+    setPickupSlot(pickupSlots[0] || '')
+    setInstructions('')
+  }
+
+  function showOrderTracking() {
+    setIsCartOpen(false)
+    if (studentView === 'tracking') void refreshTrackedOrder()
+    else setStudentView('tracking')
+    setTrackingFocusRequest((request) => request + 1)
+  }
+
+  function openOrderTracking() {
+    setCheckoutStep(null)
+    setConfirmedOrder(null)
+    setStudentView('tracking')
+    setPickupMethod('asap')
+    setPickupSlot(pickupSlots[0] || '')
     setInstructions('')
   }
 
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="CampusBite home">
-          <span className="brand-mark">CB</span>
-          <span><strong>CampusBite</strong><small>Working name</small></span>
+        <a className="brand" href="#top" aria-label={`${BRAND.name} home`}>
+          <span className="brand-mark">{BRAND.initials}</span>
+          <span><strong>{BRAND.name}</strong><small>by {BRAND.operator}</small></span>
         </a>
-        <div className="header-actions"><div className="view-switch" aria-label="Choose app view"><button className={activeView === 'student' ? 'active' : ''} onClick={() => setActiveView('student')}>Student</button><button className={activeView === 'kitchen' ? 'active' : ''} onClick={() => { setActiveView('kitchen'); setIsCartOpen(false) }}>Kitchen</button></div>{activeView === 'student' && <button className="header-cart" onClick={() => setIsCartOpen(true)} aria-label={`Open cart with ${cartCount} items`}><span>My cart</span><span className="cart-count">{cartCount}</span></button>}</div>
+        <div className="header-actions">
+          {user.role === 'OWNER' ? (
+            <div className="view-switch" aria-label="Choose owner workspace">
+              <button
+                className={activeView === 'owner' ? 'active' : ''}
+                onClick={() => setActiveView('owner')}
+                type="button"
+              >
+                Owner
+              </button>
+              <button
+                className={activeView === 'kitchen' ? 'active' : ''}
+                onClick={() => {
+                  setActiveView('kitchen')
+                  setIsCartOpen(false)
+                }}
+                type="button"
+              >
+                Kitchen
+              </button>
+            </div>
+          ) : (
+            <span className="workspace-role-badge">
+              {user.role === 'KITCHEN' ? 'Kitchen workspace' : 'Student workspace'}
+            </span>
+          )}
+
+          {activeView === 'student' && trackedOrderId && (
+            <button
+              className={`header-track${studentView === 'tracking' ? ' active' : ''}`}
+              type="button"
+              onClick={showOrderTracking}
+              aria-label={`Track order ${trackedOrder?.token || trackedOrderId}`}
+            >
+              <span aria-hidden="true">◎</span>
+              <span>Track order</span>
+            </button>
+          )}
+
+          {activeView === 'student' && (
+            <button
+              className="header-cart"
+              onClick={() => setIsCartOpen(true)}
+              aria-label={`Open cart with ${cartCount} items`}
+            >
+              <span>My cart</span>
+              <span className="cart-count">{cartCount}</span>
+            </button>
+          )}
+
+          <SessionControls
+            error={authError}
+            isLoggingOut={isLoggingOut}
+            onEditPhone={
+              user.role === 'STUDENT' && user.phoneNumber && (user.googleLinked || user.profileDetailsMissing)
+                ? onEditPhone
+                : undefined
+            }
+            onLogout={logout}
+            onVerifyPhone={
+              user.role === 'STUDENT' &&
+              user.phoneNumber &&
+              !user.phoneVerified
+                ? () => setIsPhoneVerificationOpen(true)
+                : undefined
+            }
+            user={user}
+          />
+        </div>
       </header>
 
-      {activeView === 'kitchen' ? <KitchenDashboard orders={kitchenOrders} onStatusChange={updateOrderStatus} /> : <><main id="top">
+      {activeView === 'owner' ? (
+        <OwnerWorkspace
+          onOpenKitchen={() => setActiveView('kitchen')}
+          user={user}
+        />
+      ) : activeView === 'kitchen' ?
+      <KitchenDashboard
+  batchRecords={kitchenBatches}
+  error={kitchenError}
+  isBusy={pendingOrderIds.length > 0}
+  isLoading={isKitchenLoading}
+  orders={kitchenOrders}
+  onStartBatch={startBatch}
+  onCompleteBatch={completeBatch}
+  onRetry={() => refreshOrders()}
+  onStatusChange={updateOrderStatus}
+  pendingOrderIds={pendingOrderIds}
+/> : <>
+      {studentView === 'tracking' ? (
+        trackedOrder ? (
+          <OrderTracking
+            order={trackedOrder}
+            onBackToMenu={() => setStudentView('menu')}
+          />
+        ) : (
+          <OrderTrackingState
+            error={trackingError}
+            isLoading={isTrackingLoading}
+            onBackToMenu={() => setStudentView('menu')}
+            onRetry={refreshTrackedOrder}
+          />
+        )
+      ) : (
+      <main id="top">
         <section className="welcome-card">
           <div>
-            <p className="eyebrow">Canteen is open</p>
-            <h1>Good afternoon, Yashas.</h1>
-            <p className="welcome-copy">Choose your meal, pay online and collect it when it is ready.</p>
+            <p className="eyebrow">SMART CAMPUS DINING</p>
+            <h1>Order Smart just to Skip the long wait.</h1>
+            <p className="welcome-copy">Fresh meals prepared when you need them.</p>
           </div>
-          <div className="service-status" aria-label="Current service status">
+          <div className={`service-status ${homeStatus.state}`} aria-label="Current service status" role="status">
             <span className="status-dot"></span>
-            <span><strong>Normal service</strong><small>Estimated pickup: 8-10 min</small></span>
+            <span><strong>{homeStatus.title}</strong>{homeStatus.detail && <small>{homeStatus.detail}</small>}</span>
           </div>
         </section>
+
+        {!user.phoneVerified && (
+          <section className="phone-verification-banner" aria-label="Phone verification required">
+            <div>
+              <span aria-hidden="true">○</span>
+              <p>
+                <strong>Verify your phone to place a new order.</strong>
+                <small>You can still browse the menu and track existing orders.</small>
+              </p>
+            </div>
+            <button onClick={() => setIsPhoneVerificationOpen(true)} type="button">
+              Verify phone
+            </button>
+          </section>
+        )}
+
+        {paymentMessage && !checkoutStep && (
+          <section className={`payment-recovery-banner ${paymentStatus || ''}`} aria-live="polite">
+            <div>
+              <strong>Payment status</strong>
+              <span>{paymentMessage}</span>
+            </div>
+            {pendingPaymentAttemptId && (
+              <button
+                disabled={paymentStatus === 'checking'}
+                onClick={() => verifyPaymentWithBackend(pendingPaymentAttemptId).catch(() => {})}
+                type="button"
+              >
+                {paymentStatus === 'checking' ? 'Checking…' : 'Check again'}
+              </button>
+            )}
+          </section>
+        )}
 
         <section className="menu-section" aria-labelledby="menu-title">
           <div className="section-heading">
             <div><p className="eyebrow">Fresh from the canteen</p><h2 id="menu-title">Today's menu</h2></div>
-            <p>{visibleItems.length} items available</p>
+            <p>{visibleItems.filter(item => item.live?.available).length} items available</p>
           </div>
+          <div className="category-tabs" aria-label="When would you like to eat?">
+            <button type="button" className={menuIntent === 'now' ? 'active' : ''} onClick={() => chooseMenuIntent('now')}>I'm hungry now</button>
+            <button type="button" className={menuIntent === 'break' ? 'active' : ''} disabled={!nextBreak?.eligible} onClick={() => chooseMenuIntent('break')}>My next break is {nextBreak?.label || 'finished for today'}</button>
+            <button type="button" className={menuIntent === 'time' ? 'active' : ''} onClick={() => chooseMenuIntent('time')}>I'll choose a time</button>
+          </div>
+          {menuIntent === 'time' && <label className="field-label">Pickup window<select value={pickupSlot} onChange={event => setPickupSlot(event.target.value)}><option value="">Choose a break</option>{pickupSlots.map(slot => <option key={slot} value={slot}>{slot}</option>)}</select></label>}
+          <p role="status">{liveMenu?.error || (!liveMenu ? 'Checking today’s kitchen availability…' : pickupMethod === 'scheduled' && !pickupSlots.length ? 'Advance orders are closed for today.' : 'Scheduled pickups close one hour before the break.')}</p>
           <div className="category-tabs" aria-label="Menu categories">
             {categories.map((category) => (
               <button className={activeCategory === category ? 'active' : ''} key={category} type="button" onClick={() => setActiveCategory(category)}>{category}</button>
@@ -139,8 +1063,10 @@ function App() {
                   <div className="food-content">
                     <div className="food-title-row"><h3>{item.name}</h3><strong>₹{item.price}</strong></div>
                     <p>{item.description}</p><span className="prep-time">{item.time}</span>
+                    {item.live?.recommended && <small>Good for your pickup</small>}
+                    {!item.live?.available && <small role="status">{item.live?.reason || 'Checking availability…'}</small>}
                     {quantity === 0 ? (
-                      <button className="add-button" type="button" onClick={() => addItem(item.id)}>Add to cart</button>
+                      <button className="add-button" type="button" disabled={!item.live?.available} onClick={() => addItem(item.id)}>Add to cart</button>
                     ) : (
                       <div className="quantity-control" aria-label={`${item.name} quantity`}>
                         <button type="button" onClick={() => removeItem(item.id)}>−</button><span>{quantity}</span><button type="button" onClick={() => addItem(item.id)}>+</button>
@@ -153,8 +1079,9 @@ function App() {
           </div>
         </section>
       </main>
+      )}
 
-      {cartCount > 0 && (
+      {studentView !== 'tracking' && cartCount > 0 && (
         <button className="cart-bar" type="button" onClick={() => setIsCartOpen(true)}>
           <span><strong>{cartCount} {cartCount === 1 ? 'item' : 'items'}</strong><small>₹{cartTotal}</small></span><span>View cart →</span>
         </button>
@@ -183,8 +1110,10 @@ function App() {
                 <div className="cart-summary">
                   <div><span>Item total</span><strong>₹{cartTotal}</strong></div>
                   <button className="clear-cart-button" type="button" onClick={clearCart}>Clear cart</button>
-                  <p>Payment integration comes next. This checkout currently confirms a test order.</p>
-                  <button className="checkout-button" type="button" onClick={openCheckout}>Continue to checkout · ₹{cartTotal}</button>
+                  <p>Your final total is verified by {BRAND.name} before secure checkout opens.</p>
+                  <button className="checkout-button" type="button" onClick={openCheckout}>
+                    Continue to checkout · ₹{cartTotal}
+                  </button>
                 </div>
               </>
             )}
@@ -219,7 +1148,7 @@ function App() {
                 {pickupMethod === 'scheduled' && (
                   <label className="field-label">Pickup window
                     <select value={pickupSlot} onChange={(event) => setPickupSlot(event.target.value)}>{pickupSlots.map((slot) => <option value={slot} key={slot}>{slot}</option>)}</select>
-                    <small>These are placeholder slots. Live capacity rules will be connected later.</small>
+                    <small>Scheduled pickups close one hour before the break starts.</small>
                   </label>
                 )}
                 <label className="field-label">Special instructions <span>(optional)</span>
@@ -233,16 +1162,54 @@ function App() {
             {checkoutStep === 'review' && (
               <div className="checkout-content">
                 <p className="eyebrow">Final check</p><h1>Review your order</h1>
-                <p className="checkout-intro">Confirm the items and pickup timing before creating this test order.</p>
+                <p className="checkout-intro">Confirm the items and pickup timing before paying securely through the payment provider.</p>
                 <div className="review-card">
                   {cartItems.map((item) => (
                     <div className="review-row" key={item.id}><span>{item.emoji}</span><div><strong>{item.name}</strong><small>Quantity {cart[item.id]}</small></div><strong>₹{item.price * cart[item.id]}</strong></div>
                   ))}
-                  <div className="review-total"><span>Total</span><strong>₹{cartTotal}</strong></div>
+                  <div className="review-total"><span>{trustedPaymentTotal ? `${BRAND.name} verified total` : 'Estimated total'}</span><strong>₹{trustedPaymentTotal || cartTotal}</strong></div>
                 </div>
                 <div className="pickup-summary"><span>Pickup</span><strong>{pickupMethod === 'scheduled' ? pickupSlot : 'As soon as ready'}</strong>{instructions.trim() && <small>Note: {instructions.trim()}</small>}</div>
-                <div className="demo-notice">No payment will be charged. Payment verification will be connected in a later sprint.</div>
-                <button className="primary-action" type="button" onClick={confirmOrder}>Confirm test order · ₹{cartTotal}</button>
+                <div className="payment-safety-notice">
+                  <strong>Secure payment · UPI where available</strong>
+                  <span>No order reaches the Kitchen until {BRAND.name} verifies a captured payment directly with the payment provider.</span>
+                </div>
+                {!user.phoneVerified && (
+                  <div className="phone-verification-review-notice" role="status">
+                    Verify your saved phone number before submitting this order.
+                    Your cart and pickup choices will remain available.
+                  </div>
+                )}
+                {orderSubmitError && (
+                  <div className="checkout-api-error" role="alert">
+                    <strong>Payment not confirmed</strong>
+                    <span>{orderSubmitError} Your cart is still here.</span>
+                  </div>
+                )}
+                {paymentMessage && (
+                  <div className={`payment-status-message ${paymentStatus || ''}`} role="status">
+                    {paymentMessage}
+                  </div>
+                )}
+                {paymentsOff && user.phoneVerified && (
+                  <p className="payments-off-note" role="status">
+                    Online payment is not switched on yet, so orders can't be placed here for now.
+                  </p>
+                )}
+                <button
+                  className="primary-action"
+                  type="button"
+                  onClick={confirmOrder}
+                  disabled={isSubmittingOrder || (paymentsOff && user.phoneVerified)}
+                >
+                  {isSubmittingOrder
+                    ? 'Connecting securely to the payment provider…'
+                    : !user.phoneVerified
+                      ? 'Verify phone to place order'
+                      : paymentsOff
+                        ? 'Online ordering opens soon'
+                        : `Pay securely with UPI · ₹${cartTotal}`}
+                </button>
               </div>
             )}
 
@@ -251,11 +1218,24 @@ function App() {
                 <div className="success-mark">✓</div><p className="eyebrow">Order confirmed</p><h1>Your token is {confirmedOrder.token}</h1>
                 <p>{confirmedOrder.pickupMethod === 'scheduled' ? `Pickup expected between ${confirmedOrder.pickupSlot}.` : 'We will show your order as ready after preparation.'}</p>
                 <div className="token-card"><span>Show this token at pickup</span><strong>{confirmedOrder.token}</strong><small>{confirmedOrder.items.reduce((total, item) => total + item.quantity, 0)} items · ₹{confirmedOrder.total}</small></div>
-                <button className="primary-action" type="button" onClick={finishOrder}>Back to menu</button>
+                <div className="confirmation-actions">
+                  <button className="primary-action" type="button" onClick={openOrderTracking}>Track My Order</button>
+                  <button className="confirmation-secondary" type="button" onClick={finishOrder}>Back to menu</button>
+                </div>
               </div>
             )}
           </section>
         </div>
+      )}
+      {isPhoneVerificationOpen && (
+        <PhoneVerificationDialog
+          onClose={() => setIsPhoneVerificationOpen(false)}
+          onEditPhone={() => {
+            setIsPhoneVerificationOpen(false)
+            onEditPhone()
+          }}
+          user={user}
+        />
       )}
       <footer className="app-footer">
   <p className="footer-tagline">Made with passion.</p>
@@ -266,11 +1246,56 @@ function App() {
   </h3>
 
   <small className="footer-version">
-    CampusBite • Version 1.0
+    {BRAND.name} • Version 1.0
   </small>
 </footer>
       </>}
     </div>
   )
 }
+
+function AuthenticatedApp({ user }) {
+  const [isEditingPhone, setIsEditingPhone] = useState(false)
+
+  const step = registrationStep(user)
+
+  if (step === 'phone' || isEditingPhone) {
+    return (
+      <PhoneOnboardingScreen
+        isCorrection={isEditingPhone}
+        onCancel={() => setIsEditingPhone(false)}
+        onCompleted={() => setIsEditingPhone(false)}
+      />
+    )
+  }
+
+  if (step === 'verification') {
+    return (
+      <PhoneVerificationDialog
+        key={user.phoneNumber}
+        mandatory
+        onEditPhone={() => setIsEditingPhone(true)}
+        user={user}
+      />
+    )
+  }
+
+  return (
+    <CampusBiteWorkspace
+      key={user.publicId}
+      onEditPhone={() => setIsEditingPhone(true)}
+      user={user}
+    />
+  )
+}
+
+function App() {
+  const { isCheckingSession, user } = useAuth()
+
+  if (isCheckingSession) return <AuthLoadingScreen />
+  if (!user) return <LoginScreen />
+
+  return <AuthenticatedApp key={user.publicId} user={user} />
+}
+
 export default App

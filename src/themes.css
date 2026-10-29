@@ -1,0 +1,49 @@
+﻿/* Chef's Campus - Multi-Theme Design System (From User Templates) */
+:root, [data-theme="canteen-counter"] {
+  --bg: #111417; --card-bg: #1A1F24; --card-border: rgba(201, 155, 89, 0.3);
+  --text: #F5EFEB; --text-muted: #9E9891; --accent: #E26D5C; --gold: #C99B59;
+  --pill-bg: #222830; --pill-active: #C99B59; --pill-active-text: #0E1114;
+  --font-display: 'Fraunces', serif; --radius: 14px; --cart-bar-bg: #173F35;
+}
+[data-theme="college-notebook"] {
+  --bg: #F7F5EC; --card-bg: #FFFFFF; --card-border: #DCD8C8;
+  --text: #1E252B; --text-muted: #6B7280; --accent: #2563EB; --gold: #D97706;
+  --pill-bg: #EAE6D8; --pill-active: #2563EB; --pill-active-text: #FFFFFF;
+  --font-display: 'Caveat', cursive; --radius: 8px; --cart-bar-bg: #1E3A8A;
+}
+[data-theme="neo-brutalist"] {
+  --bg: #FFF338; --card-bg: #FFFFFF; --card-border: #000000;
+  --text: #000000; --text-muted: #333333; --accent: #FF3B30; --gold: #000000;
+  --pill-bg: #FFFFFF; --pill-active: #000000; --pill-active-text: #FFF338;
+  --font-display: 'Space Grotesk', sans-serif; --radius: 0px; --cart-bar-bg: #000000;
+}
+[data-theme="campus-chronicle"] {
+  --bg: #F4F1EA; --card-bg: #FAF8F5; --card-border: #222222;
+  --text: #111111; --text-muted: #555555; --accent: #8B0000; --gold: #222222;
+  --pill-bg: #E5E1D8; --pill-active: #111111; --pill-active-text: #F4F1EA;
+  --font-display: 'Georgia', serif; --radius: 4px; --cart-bar-bg: #222222;
+}
+[data-theme="break-mode"] {
+  --bg: #0F172A; --card-bg: #1E293B; --card-border: #38BDF8;
+  --text: #F8FAFC; --text-muted: #94A3B8; --accent: #38BDF8; --gold: #F59E0B;
+  --pill-bg: #334155; --pill-active: #38BDF8; --pill-active-text: #0F172A;
+  --font-display: 'Manrope', sans-serif; --radius: 16px; --cart-bar-bg: #0369A1;
+}
+[data-theme="college-id"] {
+  --bg: #E2E8F0; --card-bg: #FFFFFF; --card-border: #0284C7;
+  --text: #0F172A; --text-muted: #64748B; --accent: #0284C7; --gold: #0284C7;
+  --pill-bg: #F1F5F9; --pill-active: #0284C7; --pill-active-text: #FFFFFF;
+  --font-display: 'Manrope', sans-serif; --radius: 12px; --cart-bar-bg: #0284C7;
+}
+[data-theme="late-night"] {
+  --bg: #080A0E; --card-bg: #12161F; --card-border: #EAB308;
+  --text: #FEF08A; --text-muted: #A1A1AA; --accent: #EAB308; --gold: #FACC15;
+  --pill-bg: #1C2331; --pill-active: #EAB308; --pill-active-text: #080A0E;
+  --font-display: 'Fraunces', serif; --radius: 16px; --cart-bar-bg: #713F12;
+}
+[data-theme="gamified-points"] {
+  --bg: #EFF6FF; --card-bg: #FFFFFF; --card-border: #60A5FA;
+  --text: #1E3A8A; --text-muted: #3B82F6; --accent: #F59E0B; --gold: #F59E0B;
+  --pill-bg: #DBEAFE; --pill-active: #2563EB; --pill-active-text: #FFFFFF;
+  --font-display: 'Manrope', sans-serif; --radius: 20px; --cart-bar-bg: #1E40AF;
+}

@@ -11,6 +11,13 @@ import { AuthContext } from './authContext.js'
 
 export function AuthProvider({
   useEffect(() => {
+    const cached = typeof window !== 'undefined' ? localStorage.getItem('campusbite-user') : null;
+    if (cached) {
+      try {
+        const u = JSON.parse(cached);
+        if (u && u.role) { setUser(u); setIsLoading(false); return; }
+      } catch(e) {}
+    }
     window.__setRole = (role) => {
       setUser(prev => ({ ...prev, role }));
     };

@@ -882,9 +882,6 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
 
   return (
     <div className="app-shell">
-
-      
-    
       <header className="topbar">
         <a className="brand" href="#top" aria-label={`${BRAND.name} home`}>
           <span className="brand-mark">{BRAND.initials}</span>

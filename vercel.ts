@@ -2,7 +2,7 @@ import { publicPageRoutes } from './shared/publicPages.js'
 
 // Evaluated by Vercel before the build; this value is never a VITE_* secret.
 const demoMode = process.env.VITE_DEMO_MODE === 'true'
-const backendUrl = String(process.env.CAMPUSBITE_BACKEND_URL || '').trim()
+const backendUrl = String((process.env.CAMPUSBITE_BACKEND_URL || 'https://campusbite-xkvb.onrender.com') || '').trim()
 let backendOrigin
 
 if (!demoMode) {
@@ -40,3 +40,4 @@ export const config = {
     },
   ],
 }
+

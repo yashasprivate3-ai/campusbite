@@ -882,6 +882,14 @@ function CampusBiteWorkspace({ onEditPhone, user }) {
 
   return (
     <div className="app-shell">
+
+      <div id="pilot-role-switcher" style={{ position: 'fixed', bottom: '16px', right: '16px', zIndex: 999999, background: '#0f172a', border: '1px solid #334155', padding: '6px 14px', borderRadius: '30px', display: 'flex', gap: '8px', alignItems: 'center', boxShadow: '0 4px 16px rgba(0,0,0,0.4)', fontSize: '12px' }}>
+        <span style={{ color: '#4ade80', fontWeight: 'bold' }}>? LIVE PILOT</span>
+        <button type="button" onClick={() => window.__setRole && window.__setRole('STUDENT')} style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: '14px', padding: '4px 10px', fontWeight: 'bold', cursor: 'pointer' }}>Student</button>
+        <button type="button" onClick={() => window.__setRole && window.__setRole('KITCHEN')} style={{ background: '#ea580c', color: '#fff', border: 'none', borderRadius: '14px', padding: '4px 10px', fontWeight: 'bold', cursor: 'pointer' }}>Kitchen</button>
+        <button type="button" onClick={() => window.__setRole && window.__setRole('OWNER')} style={{ background: '#2563eb', color: '#fff', border: 'none', borderRadius: '14px', padding: '4px 10px', fontWeight: 'bold', cursor: 'pointer' }}>Owner</button>
+      </div>
+    
       <header className="topbar">
         <a className="brand" href="#top" aria-label={`${BRAND.name} home`}>
           <span className="brand-mark">{BRAND.initials}</span>

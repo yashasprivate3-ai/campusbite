@@ -20,13 +20,18 @@ Official references:
 - https://developers.google.com/identity/gsi/web/guides/display-button
 - https://developers.google.com/identity/gsi/web/guides/verify-google-id-token
 
-## Google client-ID requirement and localhost setup
+## Google client-ID requirement and authorized origins
 
-Create an OAuth 2.0 Web application client in Google Cloud and add this authorized JavaScript origin:
+Create an OAuth 2.0 Web application client in Google Cloud and add the origin
+for each environment that will host the student app:
 
 ```text
 http://localhost:5173
+https://campus.chefsinstinct.in
 ```
+
+The production student app is hosted at `campus.chefsinstinct.in`. The separate
+`chefsinstinct.com` marketing site is not a CampusBite app origin.
 
 Use the same Web client ID for `GOOGLE_CLIENT_ID` and `VITE_GOOGLE_CLIENT_ID`. This authentication-only popup flow does not need a Google client secret or redirect URI. Do not place a client secret in Vite or any browser-delivered value.
 

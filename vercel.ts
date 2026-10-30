@@ -2,7 +2,7 @@ import { publicPageRoutes } from './shared/publicPages.js'
 
 // Evaluated by Vercel before the build; this value is never a VITE_* secret.
 const demoMode = process.env.VITE_DEMO_MODE === 'true'
-const backendUrl = String((process.env.CAMPUSBITE_BACKEND_URL || 'https://campusbite-xkvb.onrender.com') || '').trim()
+const backendUrl = String(process.env.CAMPUSBITE_BACKEND_URL || '').trim()
 let backendOrigin
 
 if (!demoMode) {
@@ -10,7 +10,7 @@ if (!demoMode) {
   try {
     parsed = new URL(backendUrl)
   } catch {
-    throw new Error('CAMPUSBITE_BACKEND_URL must be the HTTPS Railway backend origin.')
+    throw new Error('CAMPUSBITE_BACKEND_URL must be an HTTPS backend origin.')
   }
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password ||
       parsed.pathname !== '/' || parsed.search || parsed.hash) {
@@ -40,4 +40,3 @@ export const config = {
     },
   ],
 }
-

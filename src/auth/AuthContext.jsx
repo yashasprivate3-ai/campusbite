@@ -9,27 +9,14 @@ import {
 import { AUTH_UNAUTHORIZED_EVENT } from '../services/apiClient.js'
 import { AuthContext } from './authContext.js'
 
-export function AuthProvider({
-  useEffect(() => {
-    const cached = typeof window !== 'undefined' ? localStorage.getItem('campusbite-user') : null;
-    if (cached) {
-      try {
-        const u = JSON.parse(cached);
-        if (u && u.role) { setUser(u); setIsLoading(false); return; }
-      } catch(e) {}
-    }
-    window.__setRole = (role) => {
-      setUser(prev => ({ ...prev, role }));
-    };
-  }, []); children }) {
-  const [user, setUser] = useState({"id":1,"public_id":"usr_pilot_yashas","role":"STUDENT","displayName":"Yashas","email":"yash97.personal@gmail.com","phone_verified":1,"phoneVerified":true,"status":"ACTIVE"})
-  const [isCheckingSession, setIsCheckingSession] = useState(false)
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(null)
+  const [isCheckingSession, setIsCheckingSession] = useState(true)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [isCompletingOnboarding, setIsCompletingOnboarding] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
-  const sessionRequest = useRef(null)
   const sessionRequestSequence = useRef(0)
 
   const refreshSession = useCallback(async ({ requestId, signal } = {}) => {
@@ -60,7 +47,6 @@ export function AuthProvider({
     const controller = new AbortController()
     const requestId = sessionRequestSequence.current + 1
     sessionRequestSequence.current = requestId
-    sessionRequest.current = controller
     const initialTimer = window.setTimeout(
       () => refreshSession({ requestId, signal: controller.signal }),
       0,
@@ -72,7 +58,6 @@ export function AuthProvider({
         sessionRequestSequence.current += 1
       }
       controller.abort()
-      if (sessionRequest.current === controller) sessionRequest.current = null
     }
   }, [refreshSession])
 

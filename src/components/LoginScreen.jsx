@@ -116,7 +116,7 @@ export function LoginScreen() {
                   }
                   if (passInput) {
                     const setVal = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                    setVal.call(passInput, 'password123');
+                    setVal.call(passInput, 'Chefsinstinct.com');
                     passInput.dispatchEvent(new Event('input', { bubbles: true }));
                   }
                   setTimeout(() => { form.requestSubmit ? form.requestSubmit() : form.submit(); }, 100);
@@ -142,7 +142,7 @@ export function LoginScreen() {
                     }
                     if (passInput) {
                       const setVal = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                      setVal.call(passInput, 'password123');
+                      setVal.call(passInput, 'Chefsinstinct.com');
                       passInput.dispatchEvent(new Event('input', { bubbles: true }));
                     }
                     setTimeout(() => { form.requestSubmit ? form.requestSubmit() : form.submit(); }, 100);
@@ -167,7 +167,7 @@ export function LoginScreen() {
                     }
                     if (passInput) {
                       const setVal = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                      setVal.call(passInput, 'password123');
+                      setVal.call(passInput, 'Chefsinstinct.com');
                       passInput.dispatchEvent(new Event('input', { bubbles: true }));
                     }
                     setTimeout(() => { form.requestSubmit ? form.requestSubmit() : form.submit(); }, 100);

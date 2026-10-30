@@ -44,8 +44,10 @@ explicit approval for that provider check.
 For Google login, preserve `CAMPUSBITE_GOOGLE_LOGIN_ENABLED=true` and identical
 `GOOGLE_CLIENT_ID` / `VITE_GOOGLE_CLIENT_ID` on the backend. Configure that same
 public Web client ID on the frontend and authorize its exact HTTPS origin in
-Google. Mismatched client IDs still leave Google unconfigured. Do not add a
-Google client secret for this identity-only flow.
+Google. The V1 student app origin is `https://campus.chefsinstinct.in`; do not
+use the separate `chefsinstinct.com` marketing site as the app origin.
+Mismatched client IDs still leave Google unconfigured. Do not add a Google
+client secret for this identity-only flow.
 
 Use one Railway instance with the mounted SQLite volume; do not horizontally
 scale independent database files. Back up any existing volume database before

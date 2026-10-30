@@ -29,7 +29,7 @@ export function GoogleSignInButton({ isAuthenticating, onCredential }) {
   const buttonContainer = useRef(null)
   const credentialHandler = useRef(onCredential)
   const [scriptState, setScriptState] = useState('loading')
-  const clientId = String((import.meta.env.VITE_GOOGLE_CLIENT_ID || '83978590654-1l133epshcsocspd4bb3acrn28mk77lr.apps.googleusercontent.com') || '').trim()
+  const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '83978590654-1l133epshcsocspd4bb3acrn28mk77lr.apps.googleusercontent.com').trim()
   const googleEnabled =
     import.meta.env.VITE_CAMPUSBITE_GOOGLE_LOGIN_ENABLED === 'true'
   const configured = googleEnabled && Boolean(clientId)
@@ -118,4 +118,3 @@ export function GoogleSignInButton({ isAuthenticating, onCredential }) {
     </div>
   )
 }
-

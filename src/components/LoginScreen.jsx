@@ -19,7 +19,7 @@ const WORKSPACES = [
 ]
 
 export function LoginScreen() {
-  const { setUser, 
+  const {
     clearFeedback,
     error,
     googleLogin,
@@ -96,48 +96,6 @@ export function LoginScreen() {
 
       <section className="login-form-panel" aria-labelledby="form-title">
         <form className="login-form" onSubmit={handleSubmit}>
-        <div data-pilot-card="true" style={{ marginBottom: '1.25rem', padding: '1rem', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '0.75rem', textAlign: 'center' }}>
-          <div style={{ fontWeight: '700', color: '#166534', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
-            ? 1-TAP PILOT ACCESS (ZERO LOGIN REQUIRED)
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem' }}>
-            <button
-              type="button"
-              onClick={() => {
-                const u = { id: 1, public_id: 'usr_pilot_yashas', role: 'STUDENT', displayName: 'Yashas', email: 'yash97.personal@gmail.com', phone_verified: 1, phoneVerified: true, status: 'ACTIVE' };
-                try { localStorage.setItem('campusbite-user', JSON.stringify(u)); } catch(e){}
-                if (setUser) setUser(u);
-              }}
-              style={{ padding: '0.75rem 1rem', background: '#16a34a', color: '#ffffff', border: 'none', borderRadius: '0.5rem', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}
-            >
-              ?? 1-Tap Student Login (Yashas)
-            </button>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.25rem' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  const u = { id: 2, public_id: 'usr_pilot_kitchen', role: 'KITCHEN', displayName: 'Kitchen Lead', status: 'ACTIVE' };
-                  try { localStorage.setItem('campusbite-user', JSON.stringify(u)); } catch(e){}
-                  if (setUser) setUser(u);
-                }}
-                style={{ padding: '0.55rem', background: '#ea580c', color: '#ffffff', border: 'none', borderRadius: '0.5rem', fontWeight: '600', cursor: 'pointer', fontSize: '0.85rem' }}
-              >
-                ????? Kitchen Queue
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const u = { id: 3, public_id: 'usr_pilot_owner', role: 'OWNER', displayName: 'Yashas (Owner)', status: 'ACTIVE' };
-                  try { localStorage.setItem('campusbite-user', JSON.stringify(u)); } catch(e){}
-                  if (setUser) setUser(u);
-                }}
-                style={{ padding: '0.55rem', background: '#0f172a', color: '#ffffff', border: 'none', borderRadius: '0.5rem', fontWeight: '600', cursor: 'pointer', fontSize: '0.85rem' }}
-              >
-                ?? Owner Portal
-              </button>
-            </div>
-          </div>
-        </div>
           <div>
             <p className="eyebrow">Student access</p>
             <h2 id="form-title">Welcome back</h2>
@@ -222,4 +180,3 @@ export function LoginScreen() {
     </main>
   )
 }
-

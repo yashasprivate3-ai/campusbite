@@ -40,6 +40,12 @@ export async function requestPhoneVerification() {
   })
 }
 
+export async function requestMsg91PhoneVerification() {
+  return apiRequest('/api/auth/phone-verification/msg91/request', {
+    method: 'POST',
+  })
+}
+
 export async function verifyPhoneVerification(code) {
   return apiRequest('/api/auth/phone-verification/verify', {
     method: 'POST',

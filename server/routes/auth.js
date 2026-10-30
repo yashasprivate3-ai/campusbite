@@ -26,6 +26,7 @@ import {
 import { addFailedLoginDelay } from '../services/loginThrottle.js'
 import { updateStudentPhone } from '../services/phoneProfile.js'
 import {
+  requestMsg91PhoneVerification,
   requestPhoneVerification,
   verifyMsg91Phone,
   verifyPhoneCode,
@@ -182,6 +183,29 @@ export async function handleAuthRoutes(
       request,
     )
     const challenge = await requestPhoneVerification(
+      database,
+      authContext.internalUserId,
+      request,
+      authConfig.otp,
+      phoneVerificationProvider,
+    )
+    sendJson(response, 201, challenge)
+    return true
+  }
+
+  if (requestUrl.pathname === '/api/auth/phone-verification/msg91/request') {
+    if (request.method !== 'POST') {
+      sendMethodNotAllowed(response, ['POST'])
+      return true
+    }
+
+    const authContext = requireRole(
+      database,
+      optionalAuth(database, request, authConfig),
+      ROLES.STUDENT,
+      request,
+    )
+    const challenge = requestMsg91PhoneVerification(
       database,
       authContext.internalUserId,
       request,

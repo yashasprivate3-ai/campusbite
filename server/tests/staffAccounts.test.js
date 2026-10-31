@@ -95,7 +95,7 @@ test('CLI refuses without a database path, a missing file, or an unmigrated sche
     const oldPath = path.join(dir, 'old.db')
     const old = new DatabaseSync(oldPath); old.exec('PRAGMA user_version = 7; CREATE TABLE users(id INTEGER);'); old.close()
     const stale = runCli(['--role', 'OWNER', '--login', 'o1'], { CAMPUSBITE_DB_PATH: oldPath }, `${PASSWORD}\n${PASSWORD}\n`)
-    assert.equal(stale.status, 1); assert.match(stale.stderr, /schema is 7, expected 12/)
+    assert.equal(stale.status, 1); assert.match(stale.stderr, /schema is 7, expected 13/)
     const check = new DatabaseSync(oldPath); assert.equal(check.prepare('PRAGMA user_version').get().user_version, 7); check.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

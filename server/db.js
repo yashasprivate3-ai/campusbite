@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const SCHEMA_VERSION = 12
+const SCHEMA_VERSION = 13
 
 const baseSchema = `
   CREATE TABLE IF NOT EXISTS orders (
@@ -409,6 +409,25 @@ function migrateToVersion12(database) {
     ON msg91_access_token_uses(user_id, consumed_at);`)
 }
 
+function migrateToVersion13(database) {
+  database.exec(`CREATE TABLE IF NOT EXISTS msg91_otp_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    phone_number TEXT NOT NULL,
+    request_ip_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    resend_available_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_msg91_otp_requests_user_time
+    ON msg91_otp_requests(user_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_msg91_otp_requests_phone_time
+    ON msg91_otp_requests(phone_number, created_at);
+  CREATE INDEX IF NOT EXISTS idx_msg91_otp_requests_ip_time
+    ON msg91_otp_requests(request_ip_hash, created_at);`)
+}
+
 export function initializeDatabase(databasePath) {
   mkdirSync(path.dirname(databasePath), { recursive: true })
 
@@ -460,6 +479,7 @@ export function initializeDatabase(databasePath) {
     if (currentVersion < 10) migrateToVersion10(database)
     if (currentVersion < 11) migrateToVersion11(database)
     if (currentVersion < 12) migrateToVersion12(database)
+    if (currentVersion < 13) migrateToVersion13(database)
 
     database.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)
     database.exec('COMMIT;')

@@ -4,6 +4,7 @@ import {
   randomUUID,
   timingSafeEqual,
 } from 'node:crypto'
+import { isIP } from 'node:net'
 import { ApiError, invalidRequest } from './apiError.js'
 import { getSafeUserById, recordAuthEvent } from './auth.js'
 
@@ -23,7 +24,16 @@ function hashOtp(config, challengeId, userId, phoneNumber, code) {
 }
 
 function getRequestIpHash(request, config) {
-  const address = String(request.socket.remoteAddress || 'unknown').slice(0, 128)
+  const forwardedAddress = String(
+    request.headers?.['x-vercel-forwarded-for'] || '',
+  )
+    .split(',')[0]
+    .trim()
+  const address = (
+    isIP(forwardedAddress)
+      ? forwardedAddress
+      : String(request.socket.remoteAddress || 'unknown')
+  ).slice(0, 128)
   return createHmacHex(config.hashSecret, `ip:${address}`)
 }
 
@@ -108,19 +118,25 @@ function latestChallenge(database, userId) {
     .get(userId)
 }
 
-function countRecentRequests(database, whereClause, values, cutoff) {
+function countRecentRequests(
+  database,
+  whereClause,
+  values,
+  cutoff,
+  table = 'phone_verification_challenges',
+) {
   return Number(
     database
       .prepare(
         `SELECT COUNT(*) AS count
-           FROM phone_verification_challenges
+           FROM ${table}
           WHERE ${whereClause} AND created_at >= ?`,
       )
       .get(...values, cutoff).count,
   )
 }
 
-function throwRateLimit(database, userId, phoneNumber, dimension) {
+function createRateLimitError(database, userId, phoneNumber, dimension) {
   recordAuthEvent(database, {
     eventType: 'PHONE_VERIFICATION_RATE_LIMITED',
     success: false,
@@ -130,11 +146,15 @@ function throwRateLimit(database, userId, phoneNumber, dimension) {
       maskedPhone: maskPhoneNumber(phoneNumber),
     },
   })
-  throw new ApiError(
+  return new ApiError(
     429,
     'otp_rate_limit_reached',
     'Too many verification requests. Please try again later.',
   )
+}
+
+function throwRateLimit(database, userId, phoneNumber, dimension) {
+  throw createRateLimitError(database, userId, phoneNumber, dimension)
 }
 
 export async function requestPhoneVerification(
@@ -289,6 +309,158 @@ export async function requestPhoneVerification(
     maskedPhone: maskPhoneNumber(phoneNumber),
     provider: provider.name,
     resendAvailableAt: resendAvailableAt.toISOString(),
+  }
+}
+
+export function requestMsg91PhoneVerification(
+  database,
+  userId,
+  request,
+  config,
+  provider,
+) {
+  if (provider?.name !== 'msg91') {
+    throw new ApiError(
+      409,
+      'msg91_not_configured',
+      'MSG91 phone verification is not configured.',
+    )
+  }
+
+  const now = new Date()
+  const nowIso = now.toISOString()
+  const cutoff = new Date(
+    now.getTime() - 60 * 60 * 1000,
+  ).toISOString()
+  const requestIpHash = getRequestIpHash(request, config)
+  const expiresAt = new Date(
+    now.getTime() + config.expiresMinutes * 60 * 1000,
+  ).toISOString()
+  const resendAvailableAt = new Date(
+    now.getTime() + config.resendCooldownSeconds * 1000,
+  ).toISOString()
+  let outcome
+  let phoneNumber
+
+  database.exec('BEGIN IMMEDIATE;')
+  try {
+    const student = requireStudentPhone(database, userId)
+    phoneNumber = student.phone_number
+    database
+      .prepare('DELETE FROM msg91_otp_requests WHERE created_at < ?')
+      .run(cutoff)
+    if (student.phone_verified) {
+      outcome = new ApiError(
+        409,
+        'phone_already_verified',
+        'This phone number is already verified.',
+      )
+    } else {
+      const previous = database
+        .prepare(
+          `SELECT resend_available_at
+             FROM msg91_otp_requests
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1`,
+        )
+        .get(userId)
+
+      if (previous && new Date(previous.resend_available_at) > now) {
+        recordFailure(database, userId, 'cooldown_active', student.phone_number, {
+          provider: 'msg91',
+        })
+        outcome = new ApiError(
+          429,
+          'otp_cooldown_active',
+          'Please wait before requesting another verification code.',
+          { resendAvailableAt: previous.resend_available_at },
+        )
+      } else {
+        const accountRequests = countRecentRequests(
+          database,
+          'user_id = ?',
+          [userId],
+          cutoff,
+          'msg91_otp_requests',
+        )
+        const phoneRequests = countRecentRequests(
+          database,
+          'phone_number = ?',
+          [student.phone_number],
+          cutoff,
+          'msg91_otp_requests',
+        )
+        const ipRequests = countRecentRequests(
+          database,
+          'request_ip_hash = ?',
+          [requestIpHash],
+          cutoff,
+          'msg91_otp_requests',
+        )
+
+        if (
+          accountRequests >= config.userPhoneRequestsPerHour ||
+          phoneRequests >= config.userPhoneRequestsPerHour
+        ) {
+          outcome = createRateLimitError(
+            database,
+            userId,
+            student.phone_number,
+            accountRequests >= config.userPhoneRequestsPerHour
+              ? 'account'
+              : 'phone',
+          )
+        } else if (ipRequests >= config.ipRequestsPerHour) {
+          outcome = createRateLimitError(
+            database,
+            userId,
+            student.phone_number,
+            'ip',
+          )
+        } else {
+          database
+            .prepare(
+              `INSERT INTO msg91_otp_requests (
+                 user_id, phone_number, request_ip_hash, created_at,
+                 resend_available_at, expires_at
+               ) VALUES (?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              userId,
+              student.phone_number,
+              requestIpHash,
+              nowIso,
+              resendAvailableAt,
+              expiresAt,
+            )
+          recordAuthEvent(database, {
+            eventType: 'PHONE_VERIFICATION_REQUESTED',
+            success: true,
+            userId,
+            metadata: {
+              maskedPhone: maskPhoneNumber(student.phone_number),
+              provider: 'msg91',
+            },
+          })
+        }
+      }
+    }
+
+    database.exec('COMMIT;')
+  } catch (error) {
+    database.exec('ROLLBACK;')
+    throw error
+  }
+
+  if (outcome) throw outcome
+
+  return {
+    expiresAt,
+    maskedPhone: maskPhoneNumber(phoneNumber),
+    provider: 'msg91',
+    requestAuthorized: true,
+    resendAvailableAt,
   }
 }
 
@@ -493,62 +665,197 @@ export function verifyPhoneCode(database, userId, payload, config) {
 }
 
 export async function verifyMsg91Phone(database, userId, payload, config, provider) {
-  if (provider?.name !== 'msg91' || typeof provider.verifyAccessToken !== 'function') {
-    throw new ApiError(409, 'msg91_not_configured', 'MSG91 verification is not configured.')
+  if (
+    provider?.name !== 'msg91' ||
+    typeof provider.verifyAccessToken !== 'function'
+  ) {
+    throw new ApiError(
+      409,
+      'msg91_not_configured',
+      'MSG91 verification is not configured.',
+    )
   }
 
   const accessToken = normalizeMsg91AccessToken(payload)
   const tokenHash = createHmacHex(config.hashSecret, `msg91:${accessToken}`)
-
-  if (database.prepare('SELECT 1 FROM msg91_access_token_uses WHERE token_hash = ?').get(tokenHash)) {
-    throw new ApiError(409, 'msg91_access_token_reused', 'This MSG91 verification has already been used.')
+  if (
+    database
+      .prepare('SELECT 1 FROM msg91_access_token_uses WHERE token_hash = ?')
+      .get(tokenHash)
+  ) {
+    const replayStudent = getStudentPhone(database, userId)
+    if (replayStudent?.phone_number) {
+      recordFailure(
+        database,
+        userId,
+        'msg91_access_token_reused',
+        replayStudent.phone_number,
+        { provider: 'msg91' },
+      )
+    }
+    throw new ApiError(
+      409,
+      'msg91_access_token_reused',
+      'This MSG91 verification has already been used.',
+    )
   }
-
   const student = requireStudentPhone(database, userId)
   if (student.phone_verified) {
     throw new ApiError(409, 'phone_already_verified', 'This phone number is already verified.')
   }
 
-  const verifiedIdentity = await provider.verifyAccessToken(accessToken)
+  const nowBeforeVerification = new Date()
+  const requestAttempt = database
+    .prepare(
+      `SELECT id
+         FROM msg91_otp_requests
+        WHERE user_id = ? AND phone_number = ? AND consumed_at IS NULL
+          AND expires_at > ?
+        ORDER BY id DESC
+        LIMIT 1`,
+    )
+    .get(userId, student.phone_number, nowBeforeVerification.toISOString())
+
+  if (!requestAttempt) {
+    recordFailure(database, userId, 'msg91_request_missing', student.phone_number, {
+      provider: 'msg91',
+    })
+    throw new ApiError(
+      409,
+      'msg91_request_required',
+      'Request a new MSG91 code before verifying your phone.',
+    )
+  }
+
+  let verifiedIdentity
+  try {
+    verifiedIdentity = await provider.verifyAccessToken(accessToken)
+  } catch (error) {
+    recordFailure(
+      database,
+      userId,
+      'msg91_access_token_rejected',
+      student.phone_number,
+      { provider: 'msg91' },
+    )
+    throw error
+  }
   const now = new Date().toISOString()
   let outcome
 
   database.exec('BEGIN IMMEDIATE;')
   try {
-    if (database.prepare('SELECT 1 FROM msg91_access_token_uses WHERE token_hash = ?').get(tokenHash)) {
-      outcome = new ApiError(409, 'msg91_access_token_reused', 'This MSG91 verification has already been used.')
+    if (
+      database
+        .prepare('SELECT 1 FROM msg91_access_token_uses WHERE token_hash = ?')
+        .get(tokenHash)
+    ) {
+      recordFailure(database, userId, 'msg91_access_token_reused', student.phone_number, {
+        provider: 'msg91',
+      })
+      outcome = new ApiError(
+        409,
+        'msg91_access_token_reused',
+        'This MSG91 verification has already been used.',
+      )
     } else {
       const currentStudent = requireStudentPhone(database, userId)
-      database.prepare(
-        `INSERT INTO msg91_access_token_uses
-          (token_hash, user_id, consumed_at) VALUES (?, ?, ?)`,
-      ).run(tokenHash, userId, now)
+      const activeRequest = database
+        .prepare(
+          `SELECT id
+             FROM msg91_otp_requests
+            WHERE user_id = ? AND phone_number = ? AND consumed_at IS NULL
+            AND expires_at > ?
+            ORDER BY id DESC
+            LIMIT 1`,
+        )
+        .get(userId, currentStudent.phone_number, now)
 
-      if (currentStudent.phone_verified) {
-        outcome = new ApiError(409, 'phone_already_verified', 'This phone number is already verified.')
-      } else if (verifiedIdentity.phoneNumber !== currentStudent.phone_number) {
-        recordFailure(database, userId, 'msg91_phone_mismatch', currentStudent.phone_number, { provider: 'msg91' })
-        outcome = new ApiError(409, 'msg91_phone_mismatch', 'The verified phone does not match this account.')
-      } else if (database.prepare(
-        `SELECT id FROM users
-          WHERE phone_number = ? AND phone_verified = 1 AND id != ?
-          LIMIT 1`,
-      ).get(currentStudent.phone_number, userId)) {
-        recordFailure(database, userId, 'phone_unavailable', currentStudent.phone_number, { provider: 'msg91' })
-        outcome = new ApiError(409, 'phone_unavailable', 'This phone number cannot be verified for this account.')
-      } else {
-        const update = database.prepare(
-          `UPDATE users
-              SET phone_verified = 1, phone_verified_at = ?, updated_at = ?
-            WHERE id = ? AND phone_number = ? AND phone_verified = 0`,
-        ).run(now, now, userId, currentStudent.phone_number)
-        if (update.changes !== 1) throw new Error('MSG91 phone activation lost its account binding.')
-        recordAuthEvent(database, {
-          eventType: 'PHONE_VERIFICATION_SUCCEEDED',
-          success: true,
+      if (!activeRequest) {
+        recordFailure(
+          database,
           userId,
-          metadata: { provider: 'msg91' },
-        })
+          'msg91_request_missing',
+          currentStudent.phone_number,
+          { provider: 'msg91' },
+        )
+        outcome = new ApiError(
+          409,
+          'msg91_request_required',
+          'Request a new MSG91 code before verifying your phone.',
+        )
+      } else {
+        database.prepare(
+          `INSERT INTO msg91_access_token_uses
+            (token_hash, user_id, consumed_at) VALUES (?, ?, ?)`,
+        ).run(tokenHash, userId, now)
+        database.prepare(
+          `UPDATE msg91_otp_requests
+            SET consumed_at = ?
+            WHERE id = ? AND consumed_at IS NULL`,
+        ).run(now, activeRequest.id)
+
+        if (currentStudent.phone_verified) {
+          outcome = new ApiError(
+            409,
+            'phone_already_verified',
+            'This phone number is already verified.',
+          )
+        } else if (verifiedIdentity.phoneNumber !== currentStudent.phone_number) {
+          recordFailure(
+            database,
+            userId,
+            'msg91_phone_mismatch',
+            currentStudent.phone_number,
+            { provider: 'msg91' },
+          )
+          outcome = new ApiError(
+            409,
+            'msg91_phone_mismatch',
+            'The verified phone does not match this account.',
+          )
+        } else if (
+          database
+            .prepare(
+              `SELECT id FROM users
+                WHERE phone_number = ? AND phone_verified = 1 AND id != ?
+                LIMIT 1`,
+            )
+            .get(currentStudent.phone_number, userId)
+        ) {
+          recordFailure(
+            database,
+            userId,
+            'phone_unavailable',
+            currentStudent.phone_number,
+            { provider: 'msg91' },
+          )
+          outcome = new ApiError(
+            409,
+            'phone_unavailable',
+            'This phone number cannot be verified for this account.',
+          )
+        } else {
+          const update = database.prepare(
+            `UPDATE users
+             SET phone_verified = 1, phone_verified_at = ?, updated_at = ?
+             WHERE id = ? AND phone_number = ? AND phone_verified = 0`,
+          ).run(
+            now,
+            now,
+            userId,
+            currentStudent.phone_number,
+          )
+          if (update.changes !== 1) {
+            throw new Error('MSG91 phone activation lost its account binding.')
+          }
+          recordAuthEvent(database, {
+            eventType: 'PHONE_VERIFICATION_SUCCEEDED',
+            success: true,
+            userId,
+            metadata: { provider: 'msg91' },
+          })
+        }
       }
     }
 

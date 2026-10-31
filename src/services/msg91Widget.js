@@ -69,7 +69,7 @@ function initializeWidget() {
   return initialization
 }
 
-function invoke(method, args) {
+function invoke(method, args, failureMessage) {
   return new Promise((resolve, reject) => {
     let settled = false
     const timer = window.setTimeout(() => {
@@ -86,7 +86,7 @@ function invoke(method, args) {
       if (settled) return
       settled = true
       window.clearTimeout(timer)
-      reject(new Error('MSG91 phone verification could not be completed.'))
+      reject(new Error(failureMessage))
     }
     try {
       window[method](...args, succeed, fail)
@@ -118,15 +118,29 @@ export function isMsg91WidgetEnabled() {
 
 export async function sendMsg91Otp(phoneNumber) {
   await initializeWidget()
-  await invoke('sendOtp', [mobileIdentifier(phoneNumber)])
+  await invoke(
+    'sendOtp',
+    [mobileIdentifier(phoneNumber)],
+    'MSG91 could not confirm the code request. If the code arrived, enter it below to continue.',
+  )
 }
 
 export async function retryMsg91Otp() {
   await initializeWidget()
-  await invoke('retryOtp', [null])
+  await invoke(
+    'retryOtp',
+    [null],
+    'MSG91 could not confirm the resend. If the code arrived, enter it below to continue.',
+  )
 }
 
 export async function verifyMsg91Otp(code) {
   await initializeWidget()
-  return accessTokenFromResponse(await invoke('verifyOtp', [code]))
+  return accessTokenFromResponse(
+    await invoke(
+      'verifyOtp',
+      [code],
+      'MSG91 could not verify that code. Check it and try again.',
+    ),
+  )
 }

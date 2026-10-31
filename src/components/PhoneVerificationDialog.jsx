@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/useAuth.js'
 import {
+  requestMsg91PhoneVerification,
   requestPhoneVerification,
   verifyMsg91PhoneVerification,
   verifyPhoneVerification,
@@ -33,6 +34,7 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
   const [verified, setVerified] = useState(Boolean(user.phoneVerified))
   const [now, setNow] = useState(Date.now())
   const challengeRef = useRef(null)
+  const requestInFlightRef = useRef(false)
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
@@ -46,6 +48,8 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
   const msg91Enabled = isMsg91WidgetEnabled()
 
   const requestCode = useCallback(async () => {
+    if (requestInFlightRef.current) return
+    requestInFlightRef.current = true
     setIsRequesting(true)
     setError('')
     setMessage('')
@@ -53,17 +57,18 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
     try {
       let nextChallenge
       if (msg91Enabled) {
-        if (challengeRef.current) await retryMsg91Otp()
+        const hasWidgetSession = Boolean(challengeRef.current)
+        nextChallenge = await requestMsg91PhoneVerification()
+        challengeRef.current = nextChallenge
+        setChallenge(nextChallenge)
+        setNow(Date.now())
+        if (hasWidgetSession) await retryMsg91Otp()
         else await sendMsg91Otp(user.phoneNumber)
-        nextChallenge = {
-          maskedPhone: maskPhoneNumber(user.phoneNumber),
-          provider: 'msg91',
-        }
       } else {
         nextChallenge = await requestPhoneVerification()
+        challengeRef.current = nextChallenge
+        setChallenge(nextChallenge)
       }
-      challengeRef.current = nextChallenge
-      setChallenge(nextChallenge)
       setCode('')
       setMessage(
         nextChallenge.provider === 'meta-whatsapp'
@@ -83,6 +88,7 @@ export function PhoneVerificationDialog({ onClose, onEditPhone, user, autoReques
         }))
       }
     } finally {
+      requestInFlightRef.current = false
       setIsRequesting(false)
     }
   }, [msg91Enabled, user.phoneNumber])

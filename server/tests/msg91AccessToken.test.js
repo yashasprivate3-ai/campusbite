@@ -8,14 +8,24 @@ import {
   checkMsg91AccessToken,
   createMsg91AccessTokenVerifier,
 } from '../services/msg91AccessToken.js'
-import { verifyMsg91Phone } from '../services/phoneVerification.js'
+import {
+  requestMsg91PhoneVerification,
+  verifyMsg91Phone,
+} from '../services/phoneVerification.js'
 import { createPhoneVerificationProvider } from '../services/phoneVerificationProvider.js'
 
 const databases = []
 const temporaryDirectories = []
 const token = 'synthetic-access-token'
 const key = 'synthetic-server-key'
-const otpConfig = { hashSecret: 'synthetic-test-secret-at-least-32-characters' }
+const otpConfig = {
+  expiresMinutes: 5,
+  hashSecret: 'synthetic-test-secret-at-least-32-characters',
+  ipRequestsPerHour: 20,
+  resendCooldownSeconds: 60,
+  userPhoneRequestsPerHour: 5,
+}
+const request = { socket: { remoteAddress: '127.0.0.1' } }
 const reply = (body, status = 200) => async () =>
   new Response(JSON.stringify(body), { status })
 
@@ -37,6 +47,16 @@ function provider(result = { phoneNumber: '+919000000010' }) {
   }
 }
 
+function authorizeRequest(database, userId = studentId, requestContext = request) {
+  return requestMsg91PhoneVerification(
+    database,
+    userId,
+    requestContext,
+    otpConfig,
+    provider(),
+  )
+}
+
 afterEach(() => {
   while (databases.length) databases.pop().close()
   while (temporaryDirectories.length) rmSync(temporaryDirectories.pop(), { recursive: true, force: true })
@@ -55,8 +75,9 @@ test('schema 11 upgrades add durable MSG91 replay protection without losing exis
 
   const after = initializeDatabase(filename)
   databases.push(after)
-  assert.equal(after.prepare('PRAGMA user_version').get().user_version, 12)
+  assert.equal(after.prepare('PRAGMA user_version').get().user_version, 13)
   assert.equal(after.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'msg91_access_token_uses'").get().name, 'msg91_access_token_uses')
+  assert.equal(after.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'msg91_otp_requests'").get().name, 'msg91_otp_requests')
   assert.equal(after.prepare("SELECT display_name FROM users WHERE public_id = 'existing-student'").get().display_name, 'Existing Student')
 })
 
@@ -171,6 +192,7 @@ test('MSG91 timeout failures are generic and never expose credentials', async ()
 
 test('MSG91 activation trusts only provider phone and binds it to the authenticated student', async () => {
   const database = createDatabase()
+  authorizeRequest(database)
   const result = await verifyMsg91Phone(
     database,
     studentId,
@@ -182,12 +204,103 @@ test('MSG91 activation trusts only provider phone and binds it to the authentica
   assert.equal(result.user.phoneVerified, true)
   assert.equal(result.user.phoneNumber, '+919000000010')
   assert.equal(database.prepare('SELECT count(*) AS count FROM msg91_access_token_uses').get().count, 1)
+  assert.equal(database.prepare('SELECT consumed_at IS NOT NULL AS consumed FROM msg91_otp_requests').get().consumed, 1)
   const stored = JSON.stringify(database.prepare('SELECT * FROM msg91_access_token_uses').get())
   assert.doesNotMatch(stored, /synthetic-access-token|919000000010/)
 })
 
+test('MSG91 preflight enforces resend cooldown and account request limits', () => {
+  const database = createDatabase()
+  const oneRequestConfig = { ...otpConfig, userPhoneRequestsPerHour: 1 }
+
+  requestMsg91PhoneVerification(database, studentId, request, oneRequestConfig, provider())
+  assert.throws(
+    () => requestMsg91PhoneVerification(database, studentId, request, oneRequestConfig, provider()),
+    error => error.code === 'otp_cooldown_active',
+  )
+
+  database.prepare(
+    `UPDATE msg91_otp_requests
+        SET resend_available_at = '2000-01-01T00:00:00.000Z'`,
+  ).run()
+  assert.throws(
+    () => requestMsg91PhoneVerification(database, studentId, request, oneRequestConfig, provider()),
+    error => error.code === 'otp_rate_limit_reached',
+  )
+  assert.equal(database.prepare('SELECT count(*) AS count FROM msg91_otp_requests').get().count, 1)
+})
+
+test('MSG91 preflight enforces phone and client-IP caps across accounts', () => {
+  const database = createDatabase()
+  const otherStudentId = Number(database.prepare(`INSERT INTO users
+    (public_id, role, display_name, phone_number, phone_verified, status)
+    VALUES ('shared-ip-student', 'STUDENT', 'Shared IP', '+919000000011', 0, 'ACTIVE')`).run().lastInsertRowid)
+  const strictConfig = { ...otpConfig, ipRequestsPerHour: 1, userPhoneRequestsPerHour: 5 }
+
+  requestMsg91PhoneVerification(database, studentId, request, strictConfig, provider())
+  assert.throws(
+    () => requestMsg91PhoneVerification(database, otherStudentId, request, strictConfig, provider()),
+    error => error.code === 'otp_rate_limit_reached',
+  )
+  assert.equal(database.prepare('SELECT count(*) AS count FROM msg91_otp_requests').get().count, 1)
+})
+
+test('MSG91 phone cap applies across accounts even when their client IPs differ', () => {
+  const database = createDatabase('+919000000010')
+  const otherStudentId = Number(database.prepare(`INSERT INTO users
+    (public_id, role, display_name, phone_number, phone_verified, status)
+    VALUES ('shared-phone-student', 'STUDENT', 'Shared Phone', '+919000000010', 0, 'ACTIVE')`).run().lastInsertRowid)
+  const strictConfig = { ...otpConfig, userPhoneRequestsPerHour: 1 }
+  const otherRequest = {
+    headers: { 'x-vercel-forwarded-for': '198.51.100.27' },
+    socket: { remoteAddress: '127.0.0.1' },
+  }
+
+  requestMsg91PhoneVerification(database, studentId, request, strictConfig, provider())
+  assert.throws(
+    () => requestMsg91PhoneVerification(database, otherStudentId, otherRequest, strictConfig, provider()),
+    error => error.code === 'otp_rate_limit_reached',
+  )
+  assert.equal(database.prepare('SELECT count(*) AS count FROM msg91_otp_requests').get().count, 1)
+})
+
+test('MSG91 verification requires a recent authorized request', async () => {
+  const database = createDatabase()
+  await assert.rejects(
+    verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, provider()),
+    error => error.code === 'msg91_request_required',
+  )
+})
+
+test('MSG91 access-token rejections are audited without sensitive values', async () => {
+  const database = createDatabase()
+  authorizeRequest(database)
+  const rejectedProvider = {
+    name: 'msg91',
+    async verifyAccessToken() {
+      const error = new Error(`${token} ${key}`)
+      error.code = 'msg91_verification_failed'
+      throw error
+    },
+  }
+
+  await assert.rejects(
+    verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, rejectedProvider),
+    error => error.code === 'msg91_verification_failed',
+  )
+  const event = database.prepare(
+    `SELECT metadata_json FROM auth_events
+      WHERE event_type = 'PHONE_VERIFICATION_FAILED'
+      ORDER BY id DESC LIMIT 1`,
+  ).get()
+  assert.ok(event)
+  assert.match(event.metadata_json, /msg91_access_token_rejected/)
+  assert.doesNotMatch(event.metadata_json, /synthetic-access-token|synthetic-server-key/)
+})
+
 test('MSG91 phone mismatch fails closed and consumes the verified token against replay', async () => {
   const database = createDatabase()
+  authorizeRequest(database)
   await assert.rejects(
     verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, provider({ phoneNumber: '+919000000099' })),
     error => error.code === 'msg91_phone_mismatch',
@@ -205,12 +318,14 @@ test('MSG91 rejects token replay and duplicate phone activation', async () => {
   const otherStudentId = Number(database.prepare(`INSERT INTO users
     (public_id, role, display_name, phone_number, phone_verified, status)
     VALUES ('other-student', 'STUDENT', 'Other', '+919000000010', 0, 'ACTIVE')`).run().lastInsertRowid)
+  authorizeRequest(database, studentId)
   await verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, provider())
   await assert.rejects(
     verifyMsg91Phone(database, studentId, { accessToken: token }, otpConfig, provider()),
     error => error.code === 'msg91_access_token_reused',
   )
 
+  authorizeRequest(database, otherStudentId)
   await assert.rejects(
     verifyMsg91Phone(database, otherStudentId, { accessToken: 'other-token' }, otpConfig, provider()),
     error => error.code === 'phone_unavailable',
@@ -220,6 +335,7 @@ test('MSG91 rejects token replay and duplicate phone activation', async () => {
 
 test('concurrent MSG91 verification permits one activation and rejects the duplicate token', async () => {
   const database = createDatabase()
+  authorizeRequest(database)
   let release
   const gate = new Promise(resolve => { release = resolve })
   let calls = 0

@@ -40,8 +40,12 @@ request. A later sprint can implement delivery behind the same interface.
 
 - `POST /api/auth/phone-verification/request`
 - `POST /api/auth/phone-verification/verify` with `{ "code": "123456" }`
+- `POST /api/auth/phone-verification/msg91/request` authorizes one MSG91 widget
+  send or retry before the browser contacts MSG91.
+- `POST /api/auth/phone-verification/msg91/verify` validates the widget access
+  token with the server-only MSG91 AuthKey.
 
-Both endpoints require an authenticated STUDENT and operate only on that
+All four endpoints require an authenticated STUDENT and operate only on that
 student's current normalized phone. Responses contain masked phone details and
 safe timestamps only.
 
@@ -55,6 +59,13 @@ safe timestamps only.
 - single-use and resend invalidation;
 - one active challenge per student and phone;
 - hourly user/phone and IP request limits;
+- MSG91 sends use the same 60-second cooldown and are limited to five per
+  account and phone per hour, plus twenty per client IP per hour. The IP limit
+  is shared by students behind the same public NAT, so it can temporarily affect
+  peers on a busy campus or carrier network; account and phone caps remain
+  separate. Do not remove or increase MSG91's own throttle to compensate.
+- an MSG91 access token can be used only after an authorized request and is
+  consumed once, including when its verified phone does not match the account;
 - constant-time hash comparison;
 - verified-phone uniqueness enforced by SQLite;
 - no raw code or hash in API responses, logs, audits or browser storage.
@@ -65,6 +76,8 @@ Schema version 5 adds `users.phone_verified_at` and the
 `phone_verification_challenges` table. Phone changes clear verification time
 and invalidate active challenges. The existing partial unique index on
 verified phone numbers prevents two users from owning the same verified phone.
+Schema version 13 adds durable MSG91 request authorization records so direct
+widget retries cannot bypass the server-side cooldown and hourly limits.
 
 ## Known limitation
 
